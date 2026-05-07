@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcscheme
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# Xcode automatic
+ImmediateImageWriter
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Xcode temp
+*.moved-aside
+*.swp
+*~.nib
