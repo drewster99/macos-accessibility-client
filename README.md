@@ -30,12 +30,25 @@ useful enough to keep on the shelf next to Apple's Accessibility Inspector.
   in our app would otherwise cancel the target's menu tracking. Toggle in
   **View → Walk menu chain on AXPress**; per-press / refresh delays in
   **Settings**.
-- **Live event log.** `AXObserver` notifications for the inspected app
-  using the `AXObserverCreateWithInfoCallback` variant — surfaces the
-  system's user-info dictionary in addition to the notification name and
-  element. Click any element link in the log to reveal it in the tree.
-- **System-wide focused tracker.** Polls `kAXFocusedUIElementAttribute`
-  on the system-wide element at 4 Hz; cross-app focus follows naturally.
+- **Unified timeline.** A single bottom-pane log interleaves three
+  sources by timestamp — the inspected app's `AXObserver` notifications
+  (via `AXObserverCreateWithInfoCallback`, including the system-supplied
+  user-info dictionary), system-wide clicks, and system-wide focus
+  changes. Each row is rendered in its source column so the activity
+  flow is legible at a glance; click any row to reveal that element in
+  the tree, auto-switching the sidebar to the owning app if needed.
+- **System-wide focus tracker.** Notification-driven, not polled. A
+  single `AXObserver` rides the frontmost app's
+  `kAXFocusedUIElementChangedNotification`, and
+  `NSWorkspace.didActivateApplicationNotification` re-anchors the
+  observer on app switches. The focused element is read from the
+  system-wide AX root, so cross-app focus is captured without needing
+  one observer per process.
+- **Global click capture.** `NSEvent.addGlobalMonitorForEvents` sees
+  left/right mouse-downs in *other* apps; for each click, the AX
+  element under the cursor is resolved via
+  `AXUIElementCopyElementAtPosition` so the unified log can show
+  what was clicked, not just where.
 
 ## Getting started
 
@@ -61,24 +74,29 @@ MacOSAccessibilityClient/
 │   ├── AXElement.swift                   value-type wrapper around AXUIElement
 │   ├── AXError+ext.swift                 AXError → LocalizedError mapping
 │   ├── AXObserverWrapper.swift           AXObserver lifecycle + with-info callback
+│   ├── AXRunner.swift                    GCD bridge so blocking AX XPC stays
+│   │                                     off the main actor and cooperative pool
 │   ├── ElementSnapshot.swift             frozen view of an element for the inspector
-│   └── Formatting.swift                  shared CGRect / element-label formatters
+│   ├── Formatting.swift                  shared CGRect / element-label formatters
+│   ├── Logging.swift                     centralised os.Logger subsystems + timing helper
+│   └── Theme.swift                       role / notification family colours + symbols
 ├── Models/
 │   ├── AppInspectionSession.swift        per-app: root + observer + capped event log
 │   ├── AppSettings.swift                 @Observable, persisted via UserDefaults
+│   ├── ClickTracker.swift                global mouse-down monitor + AX hit-test
 │   ├── MenuChainWalker.swift             AXPress-replay through a menu chain
 │   ├── RunningAppsViewModel.swift        live NSWorkspace running-apps list
-│   ├── SystemFocusTracker.swift          4 Hz system-wide focus poller
-│   └── TreeExpansionState.swift          per-session expanded set + reveal/refresh
+│   ├── SystemFocusTracker.swift          notification-driven focus tracker
+│   ├── TreeExpansionState.swift          per-session expanded set + reveal/refresh
+│   └── UnifiedLogEvent.swift             enum merging app/click/focus events for the timeline
 ├── Permissions/
 │   └── AccessibilityPermissions.swift    AXIsProcessTrusted + System Settings deeplink
 └── Views/
-    ├── ContentView.swift                 sidebar + center + inspector + event log
+    ├── ContentView.swift                 sidebar + center + inspector + unified log
     ├── ElementInspectorView.swift        right pane — attrs/actions/errors/results
     ├── ElementTreeView.swift             middle pane — recursive AX tree
-    ├── EventLogView.swift                bottom pane — observer events + user info
     ├── PermissionsBanner.swift           orange banner when AX trust is missing
-    └── SystemFocusView.swift             middle pane — system-wide focus mode
+    └── UnifiedLogView.swift              bottom pane — interleaved app/click/focus log
 ```
 
 ## Notes on the API

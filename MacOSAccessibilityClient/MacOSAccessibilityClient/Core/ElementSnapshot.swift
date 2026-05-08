@@ -9,6 +9,7 @@
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import os
 
 /// One row in the inspector's attribute table.
 nonisolated struct AttributeRow: Identifiable, Sendable {
@@ -43,17 +44,28 @@ nonisolated struct ElementSnapshot: Sendable {
     let parameterizedAttributes: [String]
     let readErrors: [ReadError]
 
-    init(_ element: AXElement) {
-        self.role = element.role ?? "<unidentified>"
-        self.subrole = element.subrole?.nonEmptyOrNil
-        self.title = element.title?.nonEmptyOrNil
-        self.frame = element.frame
+    /// Build a snapshot off the cooperative pool. Single hop to `AXRunner` does
+    /// every read for this element back-to-back; the caller awaits and gets a
+    /// finished `Sendable` value.
+    static func build(for element: AXElement) async -> ElementSnapshot {
+        await AXRunner.run { ElementSnapshot(syncFor: element) }
+    }
+
+    /// Synchronous builder. Only safe to call from inside an `AXRunner.run` block
+    /// or another already-off-cooperative context.
+    init(syncFor element: AXElement) {
+        let snapshotStart = CFAbsoluteTimeGetCurrent()
+        let resolvedRole = element.syncRole() ?? "<unidentified>"
+        self.role = resolvedRole
+        self.subrole = element.syncSubrole()?.nonEmptyOrNil
+        self.title = element.syncTitle()?.nonEmptyOrNil
+        self.frame = element.syncFrame()
 
         var errors: [ReadError] = []
 
         let attrNames: [String]
         do {
-            attrNames = try element.attributeNames()
+            attrNames = try element.syncAttributeNames()
         } catch {
             attrNames = []
             errors.append(ReadError(
@@ -65,8 +77,9 @@ nonisolated struct ElementSnapshot: Sendable {
         var rows: [AttributeRow] = []
         rows.reserveCapacity(attrNames.count)
         for name in attrNames {
+            let attrStart = CFAbsoluteTimeGetCurrent()
             do {
-                if let raw = try element.attribute(name) {
+                if let raw = try element.syncAttribute(name) {
                     rows.append(AttributeRow(name: name, value: AXValueFormatter.describe(raw)))
                 } else {
                     rows.append(AttributeRow(name: name, value: "—"))
@@ -78,11 +91,15 @@ nonisolated struct ElementSnapshot: Sendable {
                     message: Self.message(for: error)
                 ))
             }
+            let attrMs = (CFAbsoluteTimeGetCurrent() - attrStart) * 1000
+            if attrMs > 50 {
+                AppLog.ax.notice("slow read \(resolvedRole, privacy: .public).\(name, privacy: .public) — \(attrMs, format: .fixed(precision: 2), privacy: .public) ms")
+            }
         }
         self.attributes = rows
 
         do {
-            self.actions = try element.actionNames()
+            self.actions = try element.syncActionNames()
         } catch {
             self.actions = []
             errors.append(ReadError(
@@ -92,7 +109,7 @@ nonisolated struct ElementSnapshot: Sendable {
         }
 
         do {
-            self.parameterizedAttributes = try element.parameterizedAttributeNames()
+            self.parameterizedAttributes = try element.syncParameterizedAttributeNames()
         } catch {
             self.parameterizedAttributes = []
             errors.append(ReadError(
@@ -102,16 +119,12 @@ nonisolated struct ElementSnapshot: Sendable {
         }
 
         self.readErrors = errors
+
+        let totalMs = (CFAbsoluteTimeGetCurrent() - snapshotStart) * 1000
+        AppLog.snapshot.info("snapshot(\(resolvedRole, privacy: .public)) — \(totalMs, format: .fixed(precision: 2), privacy: .public) ms · \(rows.count, privacy: .public) attrs · \(errors.count, privacy: .public) errors")
     }
 
     private static func message(for error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? "\(error)"
-    }
-}
-
-/// Serializes expensive cross-process AX reads off the main actor.
-actor ElementSnapshotBuilder {
-    func snapshot(for element: AXElement) -> ElementSnapshot {
-        ElementSnapshot(element)
     }
 }

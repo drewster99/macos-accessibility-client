@@ -8,6 +8,7 @@
 
 import CoreGraphics
 import Foundation
+import os
 
 /// Shared formatters for rendering AX-derived values consistently across the UI.
 nonisolated enum Formatting {
@@ -24,20 +25,44 @@ nonisolated enum Formatting {
     static func dimension(_ d: CGFloat) -> String {
         d.rounded() == d ? String(Int(d)) : String(format: "%.1f", Double(d))
     }
+
+    /// Single shared `HH:mm:ss.SSS` formatter used by every log row in the UI.
+    /// `DateFormatter` is heavyweight enough that allocating one per row body
+    /// re-evaluation shows up under scroll; cache it once.
+    static let timestamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f
+    }()
 }
 
-/// Builds a human-readable identifier for an `AXElement`. Mirrors the strategy used
-/// in the tree, inspector header, and event-log element summaries so a given element
-/// reads the same way wherever it appears.
+/// Builds a human-readable identifier for an `AXElement`. Both forms are async —
+/// they hop to `AXRunner` so the multi-attribute read happens off-main and
+/// off-cooperative-pool, then format and return the string. Each call costs
+/// exactly one hop (all the reads run back-to-back on the AX queue).
 nonisolated enum ElementLabel {
     /// "AXRole — Title" / "AXRole (Subrole)" / "<RoleDescription>" / "<unidentified>".
     /// Falls through richer attributes the more sparse the element is.
-    static func long(for element: AXElement) -> String {
-        let role = element.role?.nonEmptyOrNil
-        let subrole = element.subrole?.nonEmptyOrNil
-        let title = element.title?.nonEmptyOrNil
-        let roleDescription = element.roleDescription?.nonEmptyOrNil
-        let identifier = (try? element.attribute("AXIdentifier", as: String.self))?.nonEmptyOrNil
+    static func long(for element: AXElement) async -> String {
+        await AXRunner.run { Self.longSync(for: element) }
+    }
+
+    /// Sync form for callers that are already on `AXRunner.run` or another
+    /// off-cooperative-pool context (e.g. inside an AX-observer notification
+    /// callback that has hopped onto the AX queue itself).
+    static func longSync(for element: AXElement) -> String {
+        let role = element.syncRole()?.nonEmptyOrNil
+        let subrole = element.syncSubrole()?.nonEmptyOrNil
+        let title = element.syncTitle()?.nonEmptyOrNil
+        let roleDescription = element.syncRoleDescription()?.nonEmptyOrNil
+        let identifier: String? = {
+            do {
+                return try element.syncAttribute("AXIdentifier", as: String.self)?.nonEmptyOrNil
+            } catch {
+                AppLog.ax.debug("AXIdentifier read failed: \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
+        }()
 
         let prefix: String
         if let role {
@@ -54,9 +79,14 @@ nonisolated enum ElementLabel {
     }
 
     /// Compact form used in event-log rows — `<AXRole "title">` / `<AXRole>`.
-    static func short(for element: AXElement) -> String {
-        let role = element.role ?? "<unidentified>"
-        if let title = element.title?.nonEmptyOrNil {
+    static func short(for element: AXElement) async -> String {
+        await AXRunner.run { Self.shortSync(for: element) }
+    }
+
+    /// Sync sibling of `short`; safe inside an `AXRunner.run` block.
+    static func shortSync(for element: AXElement) -> String {
+        let role = element.syncRole() ?? "<unidentified>"
+        if let title = element.syncTitle()?.nonEmptyOrNil {
             return "<\(role) \"\(title)\">"
         }
         return "<\(role)>"

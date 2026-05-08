@@ -13,6 +13,7 @@ struct MacOSAccessibilityClientApp: App {
     @State private var permissions = AccessibilityPermissions()
     @State private var runningApps = RunningAppsViewModel()
     @State private var focus = SystemFocusTracker()
+    @State private var clicks = ClickTracker()
     @State private var settings = AppSettings()
 
     var body: some Scene {
@@ -21,8 +22,9 @@ struct MacOSAccessibilityClientApp: App {
                 .environment(permissions)
                 .environment(runningApps)
                 .environment(focus)
+                .environment(clicks)
                 .environment(settings)
-                .frame(minWidth: 1100, minHeight: 700)
+                .frame(minWidth: AppLayout.minWindowWidth, minHeight: AppLayout.minWindowHeight)
         }
         .windowResizability(.contentMinSize)
         .commands {

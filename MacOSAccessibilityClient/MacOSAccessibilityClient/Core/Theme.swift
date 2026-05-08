@@ -77,13 +77,31 @@ enum RoleFamily {
     }
 }
 
+/// App-wide visual tokens that aren't role/notification-driven. Centralises ad-hoc
+/// colors used by chips and accents so view files don't pin literals.
+enum Theme {
+    /// Tint for the iOS-Simulator-bridged content scope: chips, capsule borders,
+    /// any "this came from inside the simulator" affordance.
+    static let iOSBridge: Color = .purple
+}
+
+/// Layout constants shared between the app entry point and ContentView.
+enum AppLayout {
+    /// Smallest the main window is allowed to shrink — chosen so the three-pane
+    /// HSplitView still has room for the inspector.
+    static let minWindowWidth: CGFloat = 1100
+    static let minWindowHeight: CGFloat = 700
+}
+
 /// Groups AX notifications into families for the event log's color dots.
 enum NotificationFamily {
     case focus
     case value
+    case layout
     case menu
     case window
     case lifecycle
+    case announcement
     case other
 
     static func family(for notification: String) -> NotificationFamily {
@@ -98,8 +116,18 @@ enum NotificationFamily {
              kAXSelectedColumnsChangedNotification,
              kAXSelectedCellsChangedNotification,
              kAXSelectedChildrenChangedNotification,
-             kAXTitleChangedNotification:
+             kAXSelectedChildrenMovedNotification,
+             kAXRowCountChangedNotification,
+             kAXRowExpandedNotification,
+             kAXRowCollapsedNotification,
+             kAXTitleChangedNotification,
+             kAXElementBusyChangedNotification,
+             kAXUnitsChangedNotification:
             return .value
+        case kAXLayoutChangedNotification,
+             kAXMovedNotification,
+             kAXResizedNotification:
+            return .layout
         case kAXMenuOpenedNotification,
              kAXMenuClosedNotification,
              kAXMenuItemSelectedNotification:
@@ -108,7 +136,9 @@ enum NotificationFamily {
              kAXWindowMovedNotification,
              kAXWindowResizedNotification,
              kAXWindowMiniaturizedNotification,
-             kAXWindowDeminiaturizedNotification:
+             kAXWindowDeminiaturizedNotification,
+             kAXSheetCreatedNotification,
+             kAXDrawerCreatedNotification:
             return .window
         case kAXUIElementDestroyedNotification,
              kAXCreatedNotification,
@@ -117,6 +147,9 @@ enum NotificationFamily {
              kAXApplicationHiddenNotification,
              kAXApplicationShownNotification:
             return .lifecycle
+        case kAXAnnouncementRequestedNotification,
+             kAXHelpTagCreatedNotification:
+            return .announcement
         default:
             return .other
         }
@@ -126,9 +159,11 @@ enum NotificationFamily {
         switch self {
         case .focus: .blue
         case .value: .green
+        case .layout: .pink
         case .menu: .indigo
         case .window: .cyan
         case .lifecycle: .orange
+        case .announcement: .yellow
         case .other: .gray
         }
     }

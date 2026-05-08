@@ -8,11 +8,13 @@
 
 import AppKit
 import SwiftUI
+import os
 
-/// Center pane: a recursively-rendered AX tree starting at `root`. Children of each row
-/// are loaded lazily via `.task`; expanded state lives in the shared
-/// `TreeExpansionState` so the whole tree can be expanded/collapsed/refreshed by code
-/// outside this view (event-log click-to-reveal, menu-walker post-walk refresh, etc.).
+/// Center pane: a recursively-rendered AX tree starting at `root`. Each row pre-fetches
+/// its role + label + children asynchronously via `AXRunner` (off cooperative pool, off
+/// main) so view body evaluations don't trigger XPC calls. Expanded state lives in the
+/// shared `TreeExpansionState` so the whole tree can be expanded/collapsed/refreshed by
+/// code outside this view.
 struct ElementTreeView: View {
     @Environment(TreeExpansionState.self) private var expansionState
     @State private var revealTask: Task<Void, Never>?
@@ -68,11 +70,13 @@ private struct ElementTreeRow: View {
     let level: Int
     @Binding var selection: AXElement?
 
+    @State private var role: String?
+    @State private var label: String = "…"
     @State private var children: [AXElement] = []
     @State private var loaded = false
 
     var body: some View {
-        let family = RoleFamily.family(for: element.role)
+        let family = RoleFamily.family(for: role)
         VStack(alignment: .leading, spacing: 0) {
             Button(action: handleClick) {
                 HStack(spacing: 6) {
@@ -84,7 +88,7 @@ private struct ElementTreeRow: View {
                         .font(.system(size: 11))
                         .frame(width: 14)
                         .foregroundStyle(family.color)
-                    Text(ElementLabel.long(for: element))
+                    Text(label)
                         .font(.system(.body, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -107,7 +111,20 @@ private struct ElementTreeRow: View {
             }
         }
         .task(id: refreshKey) {
-            children = element.children
+            let start = CFAbsoluteTimeGetCurrent()
+            // Fetch role + label + children together so visible-row populate is one
+            // synchronous run on the AX queue rather than three round-trips.
+            async let fetchedRole = element.role()
+            async let fetchedLabel = ElementLabel.long(for: element)
+            async let fetchedChildren = element.children()
+            let (r, l, c) = await (fetchedRole, fetchedLabel, fetchedChildren)
+            let ms = (CFAbsoluteTimeGetCurrent() - start) * 1000
+            if ms > 25 {
+                AppLog.tree.notice("tree row populate(\(r ?? "?", privacy: .public)) — \(ms, format: .fixed(precision: 2), privacy: .public) ms · \(c.count, privacy: .public) children")
+            }
+            role = r
+            label = l
+            children = c
             loaded = true
         }
     }
@@ -136,7 +153,9 @@ private struct ElementTreeRow: View {
         let optionDown = NSEvent.modifierFlags.contains(.option)
         selection = element
         if optionDown {
-            expansionState.expandRecursively(from: element)
+            Task { @MainActor in
+                await expansionState.expandRecursively(from: element)
+            }
         } else if loaded && !children.isEmpty {
             expansionState.toggle(element)
         }

@@ -44,32 +44,42 @@ final class TreeExpansionState {
         }
     }
 
-    /// Marks the root and every descendant within `depth` rows as expanded. Depth 2
-    /// means root and its children are expanded, so levels 0–2 of the tree are visible.
-    func expandToDepth(_ depth: Int, from root: AXElement) {
+    /// Marks the root and every descendant within `depth` rows as expanded. The
+    /// child-walk hops to the AX queue and runs synchronously there — many fewer
+    /// hops than awaiting each child fetch individually.
+    func expandToDepth(_ depth: Int, from root: AXElement) async {
         guard depth > 0 else { return }
-        var stack: [(AXElement, Int)] = [(root, 0)]
-        while let (element, level) = stack.popLast() {
-            guard level < depth else { continue }
-            expandedElements.insert(element)
-            for child in element.children {
-                stack.append((child, level + 1))
+        let elements = await AXRunner.run {
+            var collected: Set<AXElement> = []
+            var stack: [(AXElement, Int)] = [(root, 0)]
+            while let (element, level) = stack.popLast() {
+                guard level < depth else { continue }
+                collected.insert(element)
+                for child in element.syncChildren() {
+                    stack.append((child, level + 1))
+                }
             }
+            return collected
         }
+        expandedElements.formUnion(elements)
     }
 
     /// Walks the entire subtree under `root` and marks every element expanded.
-    /// Synchronous and main-thread-blocking — every step is a cross-process AX call.
     /// `maxDepth` is a defensive cap against pathological cycles.
-    func expandRecursively(from root: AXElement, maxDepth: Int = 50) {
-        var stack: [(AXElement, Int)] = [(root, 0)]
-        while let (element, depth) = stack.popLast() {
-            guard depth < maxDepth else { continue }
-            expandedElements.insert(element)
-            for child in element.children {
-                stack.append((child, depth + 1))
+    func expandRecursively(from root: AXElement, maxDepth: Int = 50) async {
+        let elements = await AXRunner.run {
+            var collected: Set<AXElement> = []
+            var stack: [(AXElement, Int)] = [(root, 0)]
+            while let (element, depth) = stack.popLast() {
+                guard depth < maxDepth else { continue }
+                collected.insert(element)
+                for child in element.syncChildren() {
+                    stack.append((child, depth + 1))
+                }
             }
+            return collected
         }
+        expandedElements.formUnion(elements)
     }
 
     /// Bumps the refresh token for `element` so its row re-fetches `kAXChildrenAttribute`
@@ -85,10 +95,11 @@ final class TreeExpansionState {
     }
 
     /// Expand every ancestor of `element` so the row for `element` will be visible
-    /// once the tree finishes loading children. Sets `pendingReveal` so the tree view
-    /// can scroll to it.
-    func reveal(_ element: AXElement) {
-        for ancestor in element.ancestorChain() {
+    /// once the tree finishes loading children. Single AX queue hop fetches the
+    /// entire chain. Sets `pendingReveal` so the tree view can scroll to it.
+    func reveal(_ element: AXElement) async {
+        let chain = await AXRunner.run { element.syncAncestorChain() }
+        for ancestor in chain {
             expandedElements.insert(ancestor)
         }
         pendingReveal = element

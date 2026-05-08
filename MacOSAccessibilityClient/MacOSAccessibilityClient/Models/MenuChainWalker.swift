@@ -21,14 +21,14 @@ import Foundation
 @MainActor
 struct MenuChainWalker {
     enum WalkError: Error, LocalizedError {
-        case pressFailed(element: AXElement, underlying: Error)
+        case pressFailed(summary: String, underlying: Error)
         case noChain
 
         var errorDescription: String? {
             switch self {
-            case .pressFailed(let element, let underlying):
+            case .pressFailed(let summary, let underlying):
                 let underlyingMsg = (underlying as? LocalizedError)?.errorDescription ?? "\(underlying)"
-                return "AXPress on \(ElementLabel.short(for: element)) failed: \(underlyingMsg)"
+                return "AXPress on \(summary) failed: \(underlyingMsg)"
             case .noChain:
                 return "Element has no AXMenuItem/AXMenuBarItem ancestors."
             }
@@ -40,21 +40,24 @@ struct MenuChainWalker {
 
     /// Build `[root → … → leaf]` of just the menu-related ancestors (`AXMenuBarItem` and
     /// `AXMenuItem`). Excludes the `AXMenu` containers between them — those aren't pressable.
-    static func collectMenuChain(to leaf: AXElement, maxDepth: Int = 80) -> [AXElement] {
-        var chain: [AXElement] = []
-        var current: AXElement? = leaf
-        var visited: Set<AXElement> = []
-        var depth = 0
-        while let element = current, depth < maxDepth, !visited.contains(element) {
-            visited.insert(element)
-            if let role = element.role,
-               role == kAXMenuItemRole || role == kAXMenuBarItemRole {
-                chain.append(element)
+    /// Single hop to the AX queue does the whole walk (parent reads × N).
+    static func collectMenuChain(to leaf: AXElement, maxDepth: Int = 80) async -> [AXElement] {
+        await AXRunner.run {
+            var chain: [AXElement] = []
+            var current: AXElement? = leaf
+            var visited: Set<AXElement> = []
+            var depth = 0
+            while let element = current, depth < maxDepth, !visited.contains(element) {
+                visited.insert(element)
+                if let role = element.syncRole(),
+                   role == kAXMenuItemRole || role == kAXMenuBarItemRole {
+                    chain.append(element)
+                }
+                current = element.syncParent()
+                depth += 1
             }
-            current = element.parent
-            depth += 1
+            return chain.reversed()
         }
-        return chain.reversed()
     }
 
     /// Activate the target app, then `AXPress` each link in the chain in root-first order
@@ -62,7 +65,7 @@ struct MenuChainWalker {
     /// configured refresh delay so the now-populated submenu becomes visible in the tree.
     /// Returns the count of presses issued (== chain length).
     func performAXPressWalk(to leaf: AXElement) async throws -> Int {
-        let chain = Self.collectMenuChain(to: leaf)
+        let chain = await Self.collectMenuChain(to: leaf)
         guard !chain.isEmpty else { throw WalkError.noChain }
 
         if let pid = leaf.pid,
@@ -78,9 +81,10 @@ struct MenuChainWalker {
         for (index, item) in chain.enumerated() {
             try Task.checkCancellation()
             do {
-                try item.perform(kAXPressAction)
+                try await item.perform(kAXPressAction)
             } catch {
-                throw WalkError.pressFailed(element: item, underlying: error)
+                let summary = await ElementLabel.short(for: item)
+                throw WalkError.pressFailed(summary: summary, underlying: error)
             }
             if index < chain.count - 1, pressDelay > 0 {
                 try await Task.sleep(for: .seconds(pressDelay))

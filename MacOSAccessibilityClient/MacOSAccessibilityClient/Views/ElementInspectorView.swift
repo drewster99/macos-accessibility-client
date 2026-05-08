@@ -24,7 +24,6 @@ struct ElementInspectorView: View {
     @State private var lastActionResult: ActionResult?
     @State private var isPerforming: Bool = false
     @State private var actionTask: Task<Void, Never>?
-    private let snapshotBuilder = ElementSnapshotBuilder()
 
     private struct ActionResult: Identifiable {
         let id = UUID()
@@ -61,7 +60,7 @@ struct ElementInspectorView: View {
             snapshot = nil
             lastActionResult = nil
             guard let element else { return }
-            let builtSnapshot = await snapshotBuilder.snapshot(for: element)
+            let builtSnapshot = await ElementSnapshot.build(for: element)
             guard !Task.isCancelled else { return }
             snapshot = builtSnapshot
         }
@@ -258,19 +257,26 @@ struct ElementInspectorView: View {
         if willWalkChain(for: action) {
             performMenuChainWalk(to: element)
         } else {
-            do {
-                try element.perform(action)
-                lastActionResult = ActionResult(action: action, success: true, message: nil)
-            } catch {
-                let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-                lastActionResult = ActionResult(action: action, success: false, message: msg)
+            actionTask?.cancel()
+            isPerforming = true
+            actionTask = Task { @MainActor in
+                defer { isPerforming = false }
+                do {
+                    try await element.perform(action)
+                    lastActionResult = ActionResult(action: action, success: true, message: nil)
+                } catch {
+                    let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    lastActionResult = ActionResult(action: action, success: false, message: msg)
+                }
             }
         }
     }
 
+    /// Uses the snapshot's role (already-fetched, no extra AX hop) so the body stays
+    /// off the AX bus during normal renders.
     private func willWalkChain(for action: String) -> Bool {
-        guard settings.walkMenuChainOnPress, action == kAXPressAction, let element else { return false }
-        guard let role = element.role else { return false }
+        guard settings.walkMenuChainOnPress, action == kAXPressAction, element != nil else { return false }
+        guard let role = snapshot?.role else { return false }
         return role == kAXMenuItemRole || role == kAXMenuBarItemRole
     }
 

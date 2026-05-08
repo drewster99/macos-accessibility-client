@@ -13,12 +13,23 @@ import Observation
 /// Tracks the set of regular (foreground) running applications and exposes them as
 /// `Identifiable` rows so SwiftUI can render a live list. Filters out background
 /// daemons (`.prohibited`, `.accessory`) since they don't have user-facing UI.
+///
+/// Note on iOS Simulator: simulated user-app processes are NOT surfaced here.
+/// They don't appear in `NSWorkspace.runningApplications`, and even when located
+/// via `proc_listallpids` their PIDs return `kAXErrorCannotComplete` for every
+/// attribute — they have no Mac-side AX server. The iOS UI is bridged into
+/// `Simulator.app`'s own AX tree under `AXGroup (iOSContentGroup)`, so to
+/// inspect a simulator app you select `Simulator` from this list and drill in.
 @MainActor
 @Observable
 final class RunningAppsViewModel {
     private(set) var apps: [RunningApp] = []
 
-    private var notificationObservers: [NSObjectProtocol] = []
+    /// `@ObservationIgnored` + `nonisolated(unsafe)` so `deinit` can read the
+    /// tokens to unregister them. Mutated only during `init` under main-actor
+    /// isolation; read in `deinit` when no other reference to `self` exists.
+    @ObservationIgnored
+    private nonisolated(unsafe) var notificationObservers: [NSObjectProtocol] = []
     private var policyObservations: [pid_t: NSKeyValueObservation] = [:]
 
     init() {
@@ -33,12 +44,26 @@ final class RunningAppsViewModel {
         rebuild()
     }
 
-    /// Builds an `AXElement` for the app and applies a 2.0s messaging timeout so a
-    /// hung target can't lock up the inspector.
+    /// Builds an `AXElement` for the app and applies a generous messaging timeout
+    /// so a hung target can't lock up the inspector. 5.0s rather than something
+    /// shorter because iOS Simulator's `iOSContentGroup` bridge node legitimately
+    /// takes multiple seconds to enumerate `AXChildren` on a populated screen —
+    /// 2s was failing with `kAXErrorCannotComplete` even when the bridge wasn't hung.
     func element(for app: RunningApp) -> AXElement {
         let element = AXElement.application(pid: app.pid)
-        element.setMessagingTimeout(2.0)
+        element.setMessagingTimeout(5.0)
         return element
+    }
+
+    deinit {
+        // KVO entries in `policyObservations` self-invalidate on dict drop, but the
+        // workspace notification tokens need an explicit `removeObserver` — see
+        // NSWorkspace docs. Lives for app lifetime today, but the cleanup keeps the
+        // class re-entrant if it's ever re-created on the fly.
+        let nc = NSWorkspace.shared.notificationCenter
+        for token in notificationObservers {
+            nc.removeObserver(token)
+        }
     }
 
     private func rebuild() {

@@ -9,12 +9,16 @@
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import os
 
 /// Lightweight Swift wrapper around `AXUIElement`. Reference-semantic underneath
 /// (the `AXUIElement` is a CFTypeRef) but this struct is a value type.
 ///
-/// All calls cross-process to the target app and are synchronous; pair the application
-/// element with `setMessagingTimeout(_:)` so an unresponsive target can't lock the caller.
+/// Read methods are **async** — they hop to `AXRunner`'s GCD queue so the cross-process
+/// XPC blocking happens off Swift's cooperative thread pool and off the main actor.
+/// Sync helpers (`syncRole()`, `syncAttribute(_:)`, …) exist for use *inside*
+/// `AXRunner.run` closures or other already-off-cooperative contexts; calling them
+/// from main actor or a default-actor task re-introduces the blocking we're avoiding.
 nonisolated struct AXElement: @unchecked Sendable {
     let raw: AXUIElement
 
@@ -30,11 +34,133 @@ nonisolated struct AXElement: @unchecked Sendable {
         AXElement(AXUIElementCreateSystemWide())
     }
 
-    // MARK: Discovery
+    /// Local call (no XPC) so it stays sync.
+    var pid: pid_t? {
+        var pid: pid_t = 0
+        if AXUIElementGetPid(raw, &pid) == .success { return pid }
+        return nil
+    }
 
-    /// All attribute names the target app exposes for this element. Returns an empty
-    /// array (not throws) when the element legitimately has none.
-    func attributeNames() throws -> [String] {
+    /// Sync XPC, but typically <1 ms. Set on the application element to apply to its
+    /// whole subtree. Called once at session start; not in any hot path. Logs (rather
+    /// than throws) on failure: a stale timeout just means subsequent reads use the
+    /// 6 s default, which is recoverable, and the alternative is forcing every caller
+    /// to handle a near-impossible error.
+    func setMessagingTimeout(_ seconds: Float) {
+        let err = AXUIElementSetMessagingTimeout(raw, seconds)
+        if err != .success {
+            AppLog.ax.error("AXUIElementSetMessagingTimeout failed: \(err.humanDescription, privacy: .public)")
+        }
+    }
+}
+
+// MARK: - Async public API (off-cooperative-pool via AXRunner)
+
+nonisolated extension AXElement {
+    /// Read an attribute. Returns `nil` (not throws) when the attribute exists but
+    /// has no value or isn't supported on this element — common, not failures.
+    func attribute(_ name: String) async throws -> AXAttributeValue? {
+        try await AXRunner.run { [self] in try self.syncAttribute(name) }
+    }
+
+    /// Typed convenience. Returns `nil` if missing or the cast fails.
+    func attribute<T: Sendable>(_ name: String, as: T.Type = T.self) async throws -> T? {
+        try await AXRunner.run { [self] in
+            try self.syncAttribute(name)?.raw as? T
+        }
+    }
+
+    /// AX-element-typed attribute reader. Bridges the raw `AXUIElement` (which Swift 6
+    /// strict mode won't treat as `Sendable`) into our `@unchecked Sendable` wrapper
+    /// before crossing the AX-queue → caller boundary.
+    func attributeElement(_ name: String) async throws -> AXElement? {
+        try await AXRunner.run { [self] in
+            guard let raw = try self.syncAttribute(name)?.raw,
+                  CFGetTypeID(raw) == AXUIElementGetTypeID()
+            else { return nil }
+            return AXElement(unsafeDowncast(raw, to: AXUIElement.self))
+        }
+    }
+
+    func attributeNames() async throws -> [String] {
+        try await AXRunner.run { [self] in try self.syncAttributeNames() }
+    }
+
+    func actionNames() async throws -> [String] {
+        try await AXRunner.run { [self] in try self.syncActionNames() }
+    }
+
+    func parameterizedAttributeNames() async throws -> [String] {
+        try await AXRunner.run { [self] in try self.syncParameterizedAttributeNames() }
+    }
+
+    /// Issue an action against the target. Side effects (menu opens, etc.) are not
+    /// reported — observe notifications or re-read state to verify.
+    func perform(_ action: String) async throws {
+        try await AXRunner.run { [self] in
+            try axCheck(
+                AXUIElementPerformAction(self.raw, action as CFString),
+                "perform(\(action))"
+            )
+        }
+    }
+
+    func role() async -> String? {
+        await AXRunner.run { [self] in self.syncRole() }
+    }
+
+    func subrole() async -> String? {
+        await AXRunner.run { [self] in self.syncSubrole() }
+    }
+
+    func title() async -> String? {
+        await AXRunner.run { [self] in self.syncTitle() }
+    }
+
+    func roleDescription() async -> String? {
+        await AXRunner.run { [self] in self.syncRoleDescription() }
+    }
+
+    func valueDescription() async -> String? {
+        await AXRunner.run { [self] in self.syncValueDescription() }
+    }
+
+    func frame() async -> CGRect? {
+        await AXRunner.run { [self] in self.syncFrame() }
+    }
+
+    func children() async -> [AXElement] {
+        await AXRunner.run { [self] in self.syncChildren() }
+    }
+
+    func parent() async -> AXElement? {
+        await AXRunner.run { [self] in self.syncParent() }
+    }
+
+    /// Walks `kAXParentAttribute` until it runs out, returning closest-first. The
+    /// whole walk happens in a single hop to the AX queue so we don't pay
+    /// hop-per-ancestor overhead.
+    func ancestorChain(maxDepth: Int = 80) async -> [AXElement] {
+        await AXRunner.run { [self] in self.syncAncestorChain(maxDepth: maxDepth) }
+    }
+}
+
+// MARK: - Sync helpers (only safe inside AXRunner.run / already-off-main contexts)
+
+nonisolated extension AXElement {
+    func syncAttribute(_ name: String) throws -> AXAttributeValue? {
+        var value: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(raw, name as CFString, &value)
+        if err == .noValue || err == .attributeUnsupported { return nil }
+        try axCheck(err, "attribute(\(name))")
+        return value.map(AXAttributeValue.init)
+    }
+
+    func syncAttribute<T: Sendable>(_ name: String, as: T.Type = T.self) throws -> T? {
+        try syncAttribute(name)?.raw as? T
+    }
+
+    func syncAttributeNames() throws -> [String] {
         var names: CFArray?
         let err = AXUIElementCopyAttributeNames(raw, &names)
         if err == .noValue || err == .attributeUnsupported { return [] }
@@ -42,8 +168,7 @@ nonisolated struct AXElement: @unchecked Sendable {
         return (names as? [String]) ?? []
     }
 
-    /// All actions (`AXPress`, `AXShowMenu`, etc.) the target supports on this element.
-    func actionNames() throws -> [String] {
+    func syncActionNames() throws -> [String] {
         var names: CFArray?
         let err = AXUIElementCopyActionNames(raw, &names)
         if err == .noValue || err == .actionUnsupported { return [] }
@@ -51,9 +176,7 @@ nonisolated struct AXElement: @unchecked Sendable {
         return (names as? [String]) ?? []
     }
 
-    /// All parameterized-attribute names. Read these via the underlying C call —
-    /// the wrapper doesn't yet expose a typed parameterized read.
-    func parameterizedAttributeNames() throws -> [String] {
+    func syncParameterizedAttributeNames() throws -> [String] {
         var names: CFArray?
         let err = AXUIElementCopyParameterizedAttributeNames(raw, &names)
         if err == .noValue || err == .parameterizedAttributeUnsupported { return [] }
@@ -61,73 +184,44 @@ nonisolated struct AXElement: @unchecked Sendable {
         return (names as? [String]) ?? []
     }
 
-    // MARK: Reads / writes
-
-    /// Read an attribute and return whatever CFType the system handed back. The caller
-    /// is responsible for downcasting. Returns `nil` (not throws) when the attribute
-    /// exists but has no value, or is unsupported on this element — those are common
-    /// and not failures.
-    func attribute(_ name: String) throws -> CFTypeRef? {
-        var value: CFTypeRef?
-        let err = AXUIElementCopyAttributeValue(raw, name as CFString, &value)
-        if err == .noValue || err == .attributeUnsupported { return nil }
-        try axCheck(err, "attribute(\(name))")
-        return value
+    /// Convenience reader for a string-typed attribute. Returns `nil` for both
+    /// "attribute not present" and genuine read failures, but logs the latter at
+    /// debug level so they're recoverable in Console.app rather than silently lost.
+    private func loggedString(_ attribute: String) -> String? {
+        do {
+            return try syncAttribute(attribute, as: String.self)
+        } catch {
+            AppLog.ax.debug("\(attribute, privacy: .public) read failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
-    /// Typed convenience. Returns `nil` when the attribute is missing or the cast fails.
-    func attribute<T>(_ name: String, as: T.Type = T.self) throws -> T? {
-        try attribute(name) as? T
+    /// Convenience reader for a CFTypeRef-typed attribute. Same semantics as
+    /// `loggedString`: nil for missing-or-unsupported plus logged-then-nil on real
+    /// failures so the caller stays simple.
+    private func loggedRaw(_ attribute: String) -> CFTypeRef? {
+        do {
+            return try syncAttribute(attribute)?.raw
+        } catch {
+            AppLog.ax.debug("\(attribute, privacy: .public) read failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
-    func setAttribute(_ name: String, value: CFTypeRef) throws {
-        try axCheck(
-            AXUIElementSetAttributeValue(raw, name as CFString, value),
-            "setAttribute(\(name))"
-        )
-    }
+    func syncRole() -> String? { loggedString(kAXRoleAttribute) }
+    func syncSubrole() -> String? { loggedString(kAXSubroleAttribute) }
+    func syncTitle() -> String? { loggedString(kAXTitleAttribute) }
+    func syncRoleDescription() -> String? { loggedString(kAXRoleDescriptionAttribute) }
 
-    /// Issue an action against the target app. Success/failure is reported via the
-    /// thrown `AXErrorWrapper`; whether the action's *side effect* happened (e.g. a
-    /// menu opened) is not — observe notifications or re-read state to verify that.
-    func perform(_ action: String) throws {
-        try axCheck(
-            AXUIElementPerformAction(raw, action as CFString),
-            "perform(\(action))"
-        )
-    }
-
-    /// Default is ~6 seconds for the app element; bring it down so a hung target can't
-    /// freeze the inspector. Set on the application element to apply to its whole subtree.
-    func setMessagingTimeout(_ seconds: Float) {
-        AXUIElementSetMessagingTimeout(raw, seconds)
-    }
-
-    var pid: pid_t? {
-        var pid: pid_t = 0
-        if AXUIElementGetPid(raw, &pid) == .success { return pid }
-        return nil
-    }
-
-    // MARK: Convenience
-
-    var role: String? { (try? attribute(kAXRoleAttribute)) as? String }
-    var subrole: String? { (try? attribute(kAXSubroleAttribute)) as? String }
-    var title: String? { (try? attribute(kAXTitleAttribute)) as? String }
-    var roleDescription: String? { (try? attribute(kAXRoleDescriptionAttribute)) as? String }
-
-    /// `kAXValueAttribute` may be a String, Number, AXValue, etc. Stringify whatever we get.
-    var valueDescription: String? {
-        guard let raw = try? attribute(kAXValueAttribute) else { return nil }
+    func syncValueDescription() -> String? {
+        guard let raw = loggedRaw(kAXValueAttribute) else { return nil }
         return AXValueFormatter.describe(raw)
     }
 
-    /// Combines `kAXPositionAttribute` (CGPoint) and `kAXSizeAttribute` (CGSize) into a CGRect.
-    var frame: CGRect? {
-        let posVal = try? attribute(kAXPositionAttribute)
-        let sizeVal = try? attribute(kAXSizeAttribute)
-        guard let posVal, let sizeVal else { return nil }
-        guard CFGetTypeID(posVal) == AXValueGetTypeID(),
+    func syncFrame() -> CGRect? {
+        guard let posVal = loggedRaw(kAXPositionAttribute),
+              let sizeVal = loggedRaw(kAXSizeAttribute),
+              CFGetTypeID(posVal) == AXValueGetTypeID(),
               CFGetTypeID(sizeVal) == AXValueGetTypeID() else { return nil }
         var origin = CGPoint.zero
         var size = CGSize.zero
@@ -137,33 +231,33 @@ nonisolated struct AXElement: @unchecked Sendable {
         return CGRect(origin: origin, size: size)
     }
 
-    var children: [AXElement] {
-        guard let raw = try? attribute(kAXChildrenAttribute) else { return [] }
-        guard let array = raw as? [AXUIElement] else { return [] }
-        return array.map(AXElement.init)
+    func syncChildren() -> [AXElement] {
+        guard let arr = loggedRaw(kAXChildrenAttribute) as? [AXUIElement] else { return [] }
+        return arr.map(AXElement.init)
     }
 
-    var parent: AXElement? {
-        guard let raw = try? attribute(kAXParentAttribute) else { return nil }
-        guard CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+    func syncParent() -> AXElement? {
+        guard let raw = loggedRaw(kAXParentAttribute),
+              CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
         return AXElement(unsafeDowncast(raw, to: AXUIElement.self))
     }
 
-    /// Walks `kAXParentAttribute` until it runs out, returning closest-first.
-    func ancestorChain(maxDepth: Int = 80) -> [AXElement] {
+    func syncAncestorChain(maxDepth: Int = 80) -> [AXElement] {
         var chain: [AXElement] = []
-        var current = self.parent
+        var current = syncParent()
         var visited: Set<AXElement> = []
         var depth = 0
         while let next = current, depth < maxDepth, !visited.contains(next) {
             visited.insert(next)
             chain.append(next)
-            current = next.parent
+            current = next.syncParent()
             depth += 1
         }
         return chain
     }
 }
+
+// MARK: - Identity
 
 nonisolated extension AXElement: Equatable, Hashable, Identifiable {
     static func == (lhs: AXElement, rhs: AXElement) -> Bool {
@@ -178,8 +272,26 @@ nonisolated extension AXElement: Equatable, Hashable, Identifiable {
     var id: AXElement { self }
 }
 
+// MARK: - Sendable wrap for opaque CF values returned from reads
+
+/// `CFTypeRef` is `Any`, which Swift can't statically prove `Sendable`. AX values
+/// are bridged from Core Foundation types whose reference semantics are immutable
+/// for our read-only use, so we wrap them here for boundary crossing back to the
+/// caller from the AX queue.
+nonisolated struct AXAttributeValue: @unchecked Sendable {
+    let raw: CFTypeRef
+}
+
+// MARK: - Stringification
+
 /// Stringifies whatever Accessibility hands us. AX values can be `String`, `NSNumber`,
 /// `AXValue` (CGPoint/CGSize/CGRect/CFRange), arrays of children, or another `AXUIElement`.
+///
+/// Always called from an already-off-cooperative context (inside `AXRunner.run` or
+/// the AX-observer notification callback, which is on main but only stringifies
+/// short-lived user-info dictionaries). Element-typed values do their own inline
+/// sync read of role/title; that nested read is tolerated because we're already
+/// off the cooperative pool.
 nonisolated enum AXValueFormatter {
     /// Cap string-typed values at this many characters when rendering. AX text-field
     /// values can be the entire document; un-truncated, CoreText/Grid layout will
@@ -203,7 +315,12 @@ nonisolated enum AXValueFormatter {
             return CFBooleanGetValue(unsafeDowncast(value, to: CFBoolean.self)) ? "true" : "false"
         }
         if typeID == AXUIElementGetTypeID() {
-            return ElementLabel.short(for: AXElement(unsafeDowncast(value, to: AXUIElement.self)))
+            let element = AXElement(unsafeDowncast(value, to: AXUIElement.self))
+            let role = element.syncRole() ?? "<unidentified>"
+            if let title = element.syncTitle(), !title.isEmpty {
+                return "<\(role) \"\(title)\">"
+            }
+            return "<\(role)>"
         }
         if typeID == CFArrayGetTypeID() {
             let count = CFArrayGetCount(unsafeDowncast(value, to: CFArray.self))
@@ -213,6 +330,10 @@ nonisolated enum AXValueFormatter {
             return describeAXValue(unsafeDowncast(value, to: AXValue.self))
         }
         return String(describing: value)
+    }
+
+    static func describe(_ value: AXAttributeValue) -> String {
+        describe(value.raw)
     }
 
     private static func describeAXValue(_ axValue: AXValue) -> String {
