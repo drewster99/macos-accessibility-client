@@ -55,8 +55,7 @@ useful enough to keep on the shelf next to Apple's Accessibility Inspector.
 Open `MacOSAccessibilityClient/MacOSAccessibilityClient.xcodeproj` in
 Xcode 16+ and run. macOS 15 or later.
 
-The target is **non-sandboxed** with **hardened runtime off** — both
-mandatory for an Accessibility-API client that drives other apps.
+The target is **non-sandboxed** so it can inspect and drive other apps via Accessibility APIs. Release builds are signed with the hardened runtime enabled for Developer ID notarization.
 
 On first launch the app calls `AXIsProcessTrustedWithOptions(prompt:
 true)`, which shows the macOS permission alert. If you miss it, use the
@@ -104,14 +103,60 @@ MacOSAccessibilityClient/
 This repo includes `release.sh`, a one-command macOS release builder/publisher.
 
 ```bash
-./release.sh              # bump patch version, build Release, create DMG, publish GitHub release
-./release.sh --dry-run    # build + DMG only; no version, git, or GitHub changes
+./release.sh              # bump patch/build, sign, notarize, staple, DMG, publish GitHub release
+./release.sh --dry-run    # local build + DMG visual test only; no signing/notarization/git/GitHub
+./release.sh --notarize-dry-run --notary-profile macos-accessibility-client
 ./release.sh --version 1.1.0
 ```
 
 The script automatically increments `MARKETING_VERSION` patch numbers (`1.0.0` → `1.0.1`) and increments `CURRENT_PROJECT_VERSION` each release. Use `--version X.Y.Z` when you want to manually move to a new minor or major version; the build number still increments.
 
-Release output is written under `build/release/`. The DMG uses the standard macOS drag-to-Applications layout with an Applications symlink and visual arrow guidance. Publishing uses GitHub CLI (`gh`) and verifies that the release and DMG asset appear on GitHub.
+Release output is written under `build/release/`. The DMG uses the standard macOS drag-to-Applications layout with an Applications symlink and visual arrow guidance. The generated background includes a high-contrast glass tile behind the Applications symlink and an arrowhead aligned to the Bezier curve's endpoint tangent so the installer remains legible on the dark theme.
+
+### Signing and notarization prerequisites
+
+Published releases are fully automated end-to-end and require Developer ID signing plus Apple notarization credentials before running `./release.sh`:
+
+1. Install a valid **Developer ID Application** certificate in the login keychain. The script auto-detects the identity when exactly one is available, or you can pass it explicitly:
+
+   ```bash
+   ./release.sh --signing-identity "Developer ID Application: Nuclear Cyborg Corp (P8MA38JTXY)"
+   # or
+   SIGNING_IDENTITY="Developer ID Application: Nuclear Cyborg Corp (P8MA38JTXY)" ./release.sh
+   ```
+
+2. Configure `xcrun notarytool` credentials. The recommended approach is a keychain profile, which keeps credentials out of shell history:
+
+   ```bash
+   xcrun notarytool store-credentials macos-accessibility-client \
+     --apple-id "you@example.com" \
+     --team-id "TEAMID" \
+     --password "app-specific-password"
+
+   NOTARY_PROFILE=macos-accessibility-client ./release.sh
+   # or
+   ./release.sh --notary-profile macos-accessibility-client
+   ```
+
+   The script also supports App Store Connect API key environment variables:
+   `NOTARY_KEY`, `NOTARY_KEY_ID`, and optional `NOTARY_ISSUER`; or Apple ID variables:
+   `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, and `NOTARY_TEAM_ID`.
+
+3. For a normal publish, run `./release.sh` (optionally with `--yes`). The default published workflow is:
+   - build the Release `.app` with Xcode,
+   - sign the `.app` with `codesign --options runtime --timestamp`,
+   - create a temporary ZIP of the `.app` with `ditto --keepParent` for Apple notarization upload,
+   - submit with `xcrun notarytool submit --wait` and fail with the notary log if Apple rejects it,
+   - staple and validate the `.app`,
+   - build the drag-to-Applications DMG from the stapled app,
+   - sign the DMG,
+   - notarize the DMG directly,
+   - staple and validate the DMG,
+   - publish the signed/notarized/stapled DMG to GitHub and verify the asset.
+
+Apple's stapler supports UDIF disk images, code-signed executable bundles, and signed flat installer packages, so the release asset stays a DMG; the ZIP is only a temporary upload wrapper for app notarization.
+
+Use `--dry-run` for quick local build/DMG visual checks without Apple credentials. Use `--notarize-dry-run` when you want to test the full signing/notarization/stapling path without committing, tagging, pushing, or creating a GitHub release.
 
 Note on build numbers: perpetually increasing `CFBundleVersion` is required for App Store uploads and is a safe convention for direct GitHub distribution, so the script increments it on every release.
 
