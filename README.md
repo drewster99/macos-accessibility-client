@@ -99,6 +99,22 @@ MacOSAccessibilityClient/
     └── UnifiedLogView.swift              bottom pane — interleaved app/click/focus log
 ```
 
+## Release automation
+
+This repo includes `release.sh`, a one-command macOS release builder/publisher.
+
+```bash
+./release.sh              # bump patch version, build Release, create DMG, publish GitHub release
+./release.sh --dry-run    # build + DMG only; no version, git, or GitHub changes
+./release.sh --version 1.1.0
+```
+
+The script automatically increments `MARKETING_VERSION` patch numbers (`1.0.0` → `1.0.1`) and increments `CURRENT_PROJECT_VERSION` each release. Use `--version X.Y.Z` when you want to manually move to a new minor or major version; the build number still increments.
+
+Release output is written under `build/release/`. The DMG uses the standard macOS drag-to-Applications layout with an Applications symlink and visual arrow guidance. Publishing uses GitHub CLI (`gh`) and verifies that the release and DMG asset appear on GitHub.
+
+Note on build numbers: perpetually increasing `CFBundleVersion` is required for App Store uploads and is a safe convention for direct GitHub distribution, so the script increments it on every release.
+
 ## Notes on the API
 
 - **Subscribe/unsubscribe is the only filter.** Notification subscriptions
