@@ -23,6 +23,12 @@ permission when prompted and you're in.
 
 Prefer to build from source? See [Getting started](#getting-started) below.
 
+### See it in action:
+<video src="https://github.com/user-attachments/assets/6f717558-91a3-4e54-8e68-787d2cf921b2"></video>
+
+[Watch you YouTube!](https://www.youtube.com/watch?v=ckXl_o9C_n4)
+
+
 ## Features
 
 - **Tree browser.** Live list of running GUI apps; pick one and walk its
