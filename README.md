@@ -12,6 +12,17 @@ Built as a hands-on reference for what's possible with the C-level
 Accessibility APIs from Swift 6 — small enough to read end-to-end and
 useful enough to keep on the shelf next to Apple's Accessibility Inspector.
 
+## Quick start
+
+Grab the latest signed, notarized DMG from the **Releases** section on
+the right side of this page — or jump straight to
+[the latest release](https://github.com/drewster99/macos-accessibility-client/releases/latest)
+([all releases](https://github.com/drewster99/macos-accessibility-client/releases)).
+Open the DMG, drag the app to Applications, and launch. Grant Accessibility
+permission when prompted and you're in.
+
+Prefer to build from source? See [Getting started](#getting-started) below.
+
 ## Features
 
 - **Tree browser.** Live list of running GUI apps; pick one and walk its
