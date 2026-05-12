@@ -51,6 +51,23 @@ struct ContentView: View {
                 expandTask?.cancel()
                 expandTask = nil
             }
+            .onAppear { autoSelectFirstAppIfNeeded() }
+            .onChange(of: permissions.isTrusted) { _, _ in
+                DispatchQueue.main.async { autoSelectFirstAppIfNeeded() }
+            }
+            .onChange(of: runningApps.apps.first?.pid) { _, _ in
+                DispatchQueue.main.async { autoSelectFirstAppIfNeeded() }
+            }
+    }
+
+    /// On launch (or whenever Accessibility access is granted), select the first
+    /// running app if the user hasn't picked one yet — an empty selection leaves the
+    /// detail pane on its placeholder, which looks unfinished.
+    private func autoSelectFirstAppIfNeeded() {
+        guard permissions.isTrusted,
+              selection == nil,
+              let first = runningApps.apps.first else { return }
+        selection = first.pid
     }
 
     @ViewBuilder
