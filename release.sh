@@ -393,19 +393,18 @@ let image = NSImage(size: size)
 image.lockFocus()
 
 let rect = NSRect(origin: .zero, size: size)
-let bg = NSGradient(starting: NSColor(calibratedRed: 0.075, green: 0.083, blue: 0.105, alpha: 1),
-                    ending: NSColor(calibratedRed: 0.16, green: 0.18, blue: 0.23, alpha: 1))!
+let bg = NSGradient(starting: NSColor(calibratedWhite: 0.972, alpha: 1),
+                    ending: NSColor(calibratedWhite: 0.925, alpha: 1))!
 bg.draw(in: rect, angle: 90)
 
-let accent = NSColor(calibratedRed: 0.33, green: 0.75, blue: 1.0, alpha: 1)
-let accentSoft = NSColor(calibratedRed: 0.33, green: 0.75, blue: 1.0, alpha: 0.32)
-let muted = NSColor(calibratedWhite: 1.0, alpha: 0.78)
-let white = NSColor.white
+let accent = NSColor(calibratedRed: 0.12, green: 0.53, blue: 0.90, alpha: 1)
+let titleColor = NSColor(calibratedWhite: 0.11, alpha: 1)
+let subtitleColor = NSColor(calibratedRed: 0.43, green: 0.43, blue: 0.45, alpha: 1)
 
 let title = "MacOS Accessibility Client"
 let titleAttrs: [NSAttributedString.Key: Any] = [
     .font: NSFont.systemFont(ofSize: 25, weight: .semibold),
-    .foregroundColor: white
+    .foregroundColor: titleColor
 ]
 let titleSize = title.size(withAttributes: titleAttrs)
 title.draw(at: NSPoint(x: (size.width - titleSize.width) / 2, y: 350), withAttributes: titleAttrs)
@@ -413,44 +412,13 @@ title.draw(at: NSPoint(x: (size.width - titleSize.width) / 2, y: 350), withAttri
 let subtitle = "Drag the app to Applications"
 let subtitleAttrs: [NSAttributedString.Key: Any] = [
     .font: NSFont.systemFont(ofSize: 15, weight: .medium),
-    .foregroundColor: muted
+    .foregroundColor: subtitleColor
 ]
 let subtitleSize = subtitle.size(withAttributes: subtitleAttrs)
 subtitle.draw(at: NSPoint(x: (size.width - subtitleSize.width) / 2, y: 322), withAttributes: subtitleAttrs)
 
-let appIconCenter = NSPoint(x: 180, y: 215)
-let appsIconCenter = NSPoint(x: 460, y: 215)
-let iconBackdropSize = NSSize(width: 148, height: 148)
-
-func drawIconBackdrop(center: NSPoint, emphasis: CGFloat) {
-    let rect = NSRect(x: center.x - iconBackdropSize.width / 2,
-                      y: center.y - iconBackdropSize.height / 2,
-                      width: iconBackdropSize.width,
-                      height: iconBackdropSize.height)
-    NSGraphicsContext.current?.saveGraphicsState()
-    let shadow = NSShadow()
-    shadow.shadowOffset = .zero
-    shadow.shadowBlurRadius = 22
-    shadow.shadowColor = NSColor(calibratedRed: 0.33, green: 0.75, blue: 1.0, alpha: emphasis)
-    shadow.set()
-    let glow = NSBezierPath(roundedRect: rect.insetBy(dx: 10, dy: 10), xRadius: 28, yRadius: 28)
-    accentSoft.setFill()
-    glow.fill()
-    NSGraphicsContext.current?.restoreGraphicsState()
-
-    let tile = NSBezierPath(roundedRect: rect.insetBy(dx: 12, dy: 12), xRadius: 26, yRadius: 26)
-    NSColor(calibratedWhite: 1.0, alpha: 0.105).setFill()
-    tile.fill()
-    NSColor(calibratedWhite: 1.0, alpha: 0.24).setStroke()
-    tile.lineWidth = 1.5
-    tile.stroke()
-}
-
-// Subtle glass tiles behind the Finder icons keep the Applications symlink visible on the dark theme
-// even when Finder draws its default icon with low unselected contrast.
-drawIconBackdrop(center: appIconCenter, emphasis: 0.12)
-drawIconBackdrop(center: appsIconCenter, emphasis: 0.22)
-
+// Finder draws the app icon, the Applications symlink, and both filename labels on top of this
+// background, so nothing is painted at the icon positions. The arrow goes between them.
 let path = NSBezierPath()
 let arrowStart = NSPoint(x: 250, y: 205)
 let arrowEnd = NSPoint(x: 390, y: 205)
@@ -485,15 +453,6 @@ arrow.lineCapStyle = .round
 accent.setStroke()
 arrow.stroke()
 
-let appLabel = "App"
-let appsLabel = "Applications"
-let labelAttrs: [NSAttributedString.Key: Any] = [
-    .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
-    .foregroundColor: muted
-]
-appLabel.draw(at: NSPoint(x: 171, y: 88), withAttributes: labelAttrs)
-appsLabel.draw(at: NSPoint(x: 405, y: 88), withAttributes: labelAttrs)
-
 image.unlockFocus()
 
 guard let tiff = image.tiffRepresentation,
@@ -507,6 +466,12 @@ SWIFT
   [[ -s "$output" ]] || fail "Failed to create DMG background image at $output"
 }
 
+# Applies the DMG's Finder presentation (window size, icon view, positions, background).
+# This step is timing-sensitive: Finder applies these asynchronously and only persists them to
+# the volume's .DS_Store on its own schedule, so we use generous delays, re-assert the window
+# bounds (setting the background picture can resize the window), and run a second pass because
+# Finder sometimes drops the first one. The caller must still pause before unmounting so the
+# .DS_Store is flushed to disk.
 run_finder_layout() {
   local volume_name="$1"
   local mount_dir="$2"
@@ -514,23 +479,30 @@ run_finder_layout() {
   /usr/bin/osascript <<APPLESCRIPT
 try
   set mountedFolder to POSIX file "${mount_dir}" as alias
+  delay 2
   tell application "Finder"
-    open mountedFolder
-    delay 1
-    set dmgWindow to Finder window 1
-    set current view of dmgWindow to icon view
-    set toolbar visible of dmgWindow to false
-    set statusbar visible of dmgWindow to false
-    set the bounds of dmgWindow to {100, 100, 740, 520}
-    set viewOptions to the icon view options of dmgWindow
-    set arrangement of viewOptions to not arranged
-    set icon size of viewOptions to ${DMG_ICON_SIZE}
-    set background picture of viewOptions to POSIX file "${background_path}"
-    set position of item "${APP_NAME}.app" of mountedFolder to {180, 215}
-    set position of item "Applications" of mountedFolder to {460, 215}
-    update mountedFolder without registering applications
-    delay 1
-    close dmgWindow
+    repeat 2 times
+      open mountedFolder
+      delay 2
+      set dmgWindow to Finder window 1
+      set current view of dmgWindow to icon view
+      set toolbar visible of dmgWindow to false
+      set statusbar visible of dmgWindow to false
+      set the bounds of dmgWindow to {100, 100, 740, 520}
+      set viewOptions to the icon view options of dmgWindow
+      set arrangement of viewOptions to not arranged
+      set icon size of viewOptions to ${DMG_ICON_SIZE}
+      set background picture of viewOptions to POSIX file "${background_path}"
+      delay 1
+      set position of item "${APP_NAME}.app" of mountedFolder to {180, 215}
+      set position of item "Applications" of mountedFolder to {460, 215}
+      set the bounds of dmgWindow to {100, 100, 740, 520}
+      delay 1
+      update mountedFolder without registering applications
+      delay 2
+      close dmgWindow
+      delay 1
+    end repeat
   end tell
   return "Finder DMG layout applied successfully for ${volume_name}"
 on error errMsg number errNum
@@ -561,6 +533,11 @@ make_dmg() {
   local size_mb
   size_mb="$(( $(du -sm "$work_dir/staging" | awk '{print $1}') + 80 ))"
 
+  if [[ -d "/Volumes/${volume_name}" ]]; then
+    warn "Detaching stale volume left mounted from a previous run: /Volumes/${volume_name}"
+    hdiutil detach "/Volumes/${volume_name}" -force >/dev/null 2>&1 || true
+  fi
+
   log "Creating writable DMG (${size_mb} MB)"
   hdiutil create -volname "$volume_name" -srcfolder "$work_dir/staging" -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW -size "${size_mb}m" "$rw_dmg" >/dev/null
 
@@ -577,11 +554,20 @@ make_dmg() {
   layout_output="$(run_finder_layout "$volume_name" "$mount_dir" "$mount_dir/.background/background.png")"
   local layout_status=$?
   echo "$layout_output" >&2
+  # Give Finder time to flush the volume's .DS_Store to disk before we unmount.
+  sleep 3
   sync
-  hdiutil detach "$device" >/dev/null
-  local detach_status=$?
+  # Finder may briefly keep the volume busy after closing its window; retry the detach.
+  local detach_status=1 attempt
+  for attempt in 1 2 3 4 5; do
+    if hdiutil detach "$device" >/dev/null 2>&1; then detach_status=0; break; fi
+    sleep 2
+  done
+  if [[ "$detach_status" -ne 0 ]]; then
+    hdiutil detach "$device" -force >/dev/null 2>&1 && detach_status=0
+  fi
   set -e
-  [[ "$detach_status" -eq 0 ]] || fail "Could not detach temporary DMG device ${device}; hdiutil detach exited ${detach_status}"
+  [[ "$detach_status" -eq 0 ]] || fail "Could not detach temporary DMG device ${device} after retries"
   [[ "$layout_status" -eq 0 ]] || fail "Finder DMG layout command failed with status ${layout_status}"
   [[ "$layout_output" != ERROR* ]] || fail "$layout_output"
 
