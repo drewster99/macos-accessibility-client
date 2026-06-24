@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.nuclearcyborg.p0a.host</string>
+  <!-- Relative to the containing app bundle; launchd execs this when the Mach service is looked up. -->
+  <key>BundleProgram</key><string>Contents/Helpers/p0a-host</string>
+  <key>MachServices</key>
+  <dict>
+    <key>P8MA38JTXY.com.nuclearcyborg.p0a.host</key><true/>
+  </dict>
+  <key>AssociatedBundleIdentifiers</key>
+  <array><string>com.nuclearcyborg.p0a.control</string></array>
+</dict>
+</plist>

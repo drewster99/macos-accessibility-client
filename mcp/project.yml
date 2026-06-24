@@ -1,0 +1,208 @@
+name: MacControlMCP
+options:
+  bundleIdPrefix: com.nuclearcyborg.maccontrol
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    PRODUCT_NAME: "$(TARGET_NAME)"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_ALLOWED: "NO"
+
+targets:
+  MacControlMCPCore:
+    type: library.static
+    platform: macOS
+    sources: [Sources/MacControlMCPCore]
+
+  AXKit:
+    type: library.static
+    platform: macOS
+    sources: [Sources/AXKit]
+    dependencies:
+      - target: MacControlMCPCore
+
+  CaptureKit:
+    type: library.static
+    platform: macOS
+    sources: [Sources/CaptureKit]
+    dependencies:
+      - target: MacControlMCPCore
+
+  InputKit:
+    type: library.static
+    platform: macOS
+    sources: [Sources/InputKit]
+    dependencies:
+      - target: MacControlMCPCore
+
+  HostKit:
+    type: library.static
+    platform: macOS
+    sources: [Sources/HostKit]
+    dependencies:
+      - target: MacControlMCPCore
+      - target: AXKit
+      - target: CaptureKit
+      - target: InputKit
+
+  MacControlStdio:
+    type: tool
+    platform: macOS
+    sources: [Sources/MacControlMCP]
+    dependencies:
+      - target: HostKit
+      - target: AXKit
+      - target: CaptureKit
+      - target: InputKit
+      - target: MacControlMCPCore
+
+  MacControlHost:
+    type: application
+    platform: macOS
+    sources: [Sources/MacControlHost]
+    info:
+      path: Generated/MacControlHost-Info.plist
+      properties:
+        CFBundleIdentifier: com.nuclearcyborg.maccontrol.host
+        CFBundleName: MacControlHost
+        LSUIElement: true
+        LSMinimumSystemVersion: "14.0"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nuclearcyborg.maccontrol.host
+    dependencies:
+      - target: HostKit
+      - target: AXKit
+      - target: CaptureKit
+      - target: InputKit
+      - target: MacControlMCPCore
+
+  MacControlRelay:
+    type: tool
+    platform: macOS
+    sources: [Sources/MacControlRelay]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nuclearcyborg.maccontrol.relay
+    dependencies:
+      - target: HostKit
+      - target: AXKit
+      - target: CaptureKit
+      - target: InputKit
+      - target: MacControlMCPCore
+
+  MacControlRegistrar:
+    type: tool
+    platform: macOS
+    sources: [Sources/MacControlRegistrar]
+
+  MacControlApp:
+    type: application
+    platform: macOS
+    sources: [Sources/MacControlApp]
+    info:
+      path: Generated/MacControlMCP-Info.plist
+      properties:
+        CFBundleName: MacControlMCP
+        LSMinimumSystemVersion: "14.0"
+    settings:
+      base:
+        PRODUCT_NAME: MacControlMCP
+        PRODUCT_BUNDLE_IDENTIFIER: com.nuclearcyborg.maccontrol
+    dependencies:
+      - target: MacControlHost
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+      - target: MacControlRelay
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+    postCompileScripts:
+      - name: Copy LaunchAgent plist
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/com.nuclearcyborg.maccontrol.host.plist
+        script: |
+          DEST="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents"
+          mkdir -p "$DEST"
+          cp "${SRCROOT}/packaging/host.launchagent.plist" "$DEST/com.nuclearcyborg.maccontrol.host.plist"
+
+  MacControlMCPCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/MacControlMCPCoreTests]
+    dependencies:
+      - target: MacControlMCPCore
+
+  AXKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/AXKitTests]
+    dependencies:
+      - target: AXKit
+      - target: MacControlMCPCore
+
+  CaptureKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/CaptureKitTests]
+    dependencies:
+      - target: CaptureKit
+      - target: MacControlMCPCore
+
+  InputKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/InputKitTests]
+    dependencies:
+      - target: InputKit
+      - target: MacControlMCPCore
+
+  HostKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/HostKitTests]
+    dependencies:
+      - target: HostKit
+      - target: AXKit
+      - target: CaptureKit
+      - target: InputKit
+      - target: MacControlMCPCore
+
+schemes:
+  All:
+    build:
+      targets:
+        MacControlApp: all
+        MacControlStdio: all
+        MacControlHost: all
+        MacControlRelay: all
+        MacControlRegistrar: all
+        MacControlMCPCoreTests: [test]
+        AXKitTests: [test]
+        CaptureKitTests: [test]
+        InputKitTests: [test]
+        HostKitTests: [test]
+    test:
+      targets:
+        - MacControlMCPCoreTests
+        - AXKitTests
+        - CaptureKitTests
+        - InputKitTests
+        - HostKitTests
+      gatherCoverageData: false
+
+  Release:
+    build:
+      targets:
+        MacControlApp: all
+    run:
+      config: Release
+    archive:
+      config: Release
