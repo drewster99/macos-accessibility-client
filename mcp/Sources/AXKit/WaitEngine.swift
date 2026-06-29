@@ -11,9 +11,9 @@ import ApplicationServices
 import Foundation
 
 public final class WaitEngine {
-    private let session: AXSession
+    private let session: ElementRegistry
 
-    public init(session: AXSession) {
+    public init(session: ElementRegistry) {
         self.session = session
     }
 

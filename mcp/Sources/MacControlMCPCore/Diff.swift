@@ -39,10 +39,10 @@ public struct ElementDiff: Equatable, Sendable {
 
 /// Injected act-and-settle (§6) for the coordinate-based input verbs. Those live in InputKit,
 /// which deliberately doesn't depend on AXKit, so they can't reach `SettleEngine` directly —
-/// the host injects this closure (wired to SettleEngine over the shared AXSession) so a
-/// `click`/`type_text`/etc. invoked with observe:"settle" + a target pid returns the
+/// the host injects this closure (wired to SettleEngine over the shared ElementRegistry) so a
+/// `click`/`type`/etc. invoked with observe:"settle" + a target pid returns the
 /// post-action diff, exactly like the AX act verbs. Not `@Sendable` (it captures the
-/// non-Sendable AXSession); calls are serialized by the host, so it's never sent across
+/// non-Sendable ElementRegistry); calls are serialized by the host, so it's never sent across
 /// isolation boundaries — same as the AX tools that hold the session.
 public typealias ActAndSettle = (_ pid: pid_t, _ action: () -> Void)
     -> (quiesced: Bool, settledAfterMs: Int, diff: ElementDiff)

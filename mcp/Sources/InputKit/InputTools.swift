@@ -20,7 +20,6 @@ public enum InputTools {
             ClickTool(canPostEvents: canPostEvents, settle: settle),
             ScrollTool(canPostEvents: canPostEvents, settle: settle),
             KeyTool(canPostEvents: canPostEvents, settle: settle),
-            TypeTextTool(canPostEvents: canPostEvents, settle: settle),
             HoverTool(canPostEvents: canPostEvents, settle: settle),
             DragTool(canPostEvents: canPostEvents, settle: settle)
         ]
@@ -84,12 +83,12 @@ public struct ClickTool: Tool {
         self.settle = settle
     }
 
-    public let name = "click"
+    public let name = "click_point"
 
     public var descriptor: [String: Any] {
         [
             "name": name,
-            "description": "Synthetic mouse click at a screen point (global top-left coords). Rides the Accessibility grant.",
+            "description": "Synthetic mouse click at raw screen coordinates (global top-left). AVOID unless you have an explicit coordinate to hit — to click a UI element, use `click(ref)`, which targets the element and brings its app frontmost. Rides the Accessibility grant.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -186,46 +185,6 @@ public struct KeyTool: Tool {
         }
         return settledResult(settle, arguments, base: ["keys": keys], post: {
             SyntheticInput.post(chord)
-        })
-    }
-}
-
-public struct TypeTextTool: Tool {
-    private let canPostEvents: @Sendable () -> Bool
-    private let settle: ActAndSettle?
-    public init(canPostEvents: @escaping @Sendable () -> Bool = { CGPreflightPostEventAccess() },
-                settle: ActAndSettle? = nil) {
-        self.canPostEvents = canPostEvents
-        self.settle = settle
-    }
-
-    public let name = "type_text"
-
-    public var descriptor: [String: Any] {
-        [
-            "name": name,
-            "description": "Type text into the focused element. via=keys (Unicode events) or paste (clipboard+⌘V, saved/restored). Rides the Accessibility grant.",
-            "inputSchema": [
-                "type": "object",
-                "properties": [
-                    "text": ["type": "string"],
-                    "via": ["type": "string", "enum": ["keys", "paste"]],
-                    "observe": observeProp(), "pid": pidProp()
-                ],
-                "required": ["text"]
-            ]
-        ]
-    }
-
-    public func call(_ arguments: [String: Any]) -> String {
-        guard canPostEvents() else { return postEventError }
-        guard let text = arguments["text"] as? String else { return #"{"error":"missing_text"}"# }
-        return settledResult(settle, arguments, base: ["chars": text.count], post: {
-            if (arguments["via"] as? String) == "paste" {
-                SyntheticInput.paste(text)
-            } else {
-                SyntheticInput.typeUnicode(text)
-            }
         })
     }
 }

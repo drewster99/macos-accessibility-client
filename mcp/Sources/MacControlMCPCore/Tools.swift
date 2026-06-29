@@ -2,7 +2,7 @@
 //  Tools.swift
 //  MacControlMCP
 //
-//  P0b grant-free tools: list_apps (NSWorkspace) and list_simulators (simctl).
+//  P0b grant-free tools: list_running_apps (NSWorkspace) and list_simulators (simctl).
 //  Neither needs an Accessibility/Screen-Recording grant, so they're testable now.
 //
 
@@ -64,7 +64,7 @@ enum Shell {
 
 public struct ListAppsTool: Tool {
     public init() {}
-    public let name = "list_apps"
+    public let name = "list_running_apps"
     public var descriptor: [String: Any] {
         [
             "name": name,

@@ -13,7 +13,7 @@ final class SettleEngineTests: XCTestCase {
         guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first else {
             throw XCTSkip("Finder not running")
         }
-        let engine = SettleEngine(session: AXSession())
+        let engine = SettleEngine(session: ElementRegistry())
         let outcome = engine.actAndSettle(pid: finder.processIdentifier, maxDepth: 1) { /* no-op */ }
 
         XCTAssertTrue(outcome.quiesced, "a stable app + no-op should quiesce, not hit the cap")
@@ -27,7 +27,7 @@ final class SettleEngineTests: XCTestCase {
         guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first else {
             throw XCTSkip("Finder not running")
         }
-        let session = AXSession()
+        let session = ElementRegistry()
         let pid = finder.processIdentifier
         let before = session.snapshot(pid: pid, maxDepth: 1)
         let after = session.snapshot(pid: pid, maxDepth: 1)
@@ -40,7 +40,7 @@ final class SettleEngineTests: XCTestCase {
         guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first else {
             throw XCTSkip("Finder not running")
         }
-        let session = AXSession()
+        let session = ElementRegistry()
         let pid = finder.processIdentifier
         XCTAssertTrue(session.getChanges(pid: pid, maxDepth: 1).isEmpty, "first call is the baseline → empty")
         XCTAssertTrue(session.getChanges(pid: pid, maxDepth: 1).isEmpty, "no change → empty diff")
@@ -51,7 +51,7 @@ final class SettleEngineTests: XCTestCase {
         guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first else {
             throw XCTSkip("Finder not running")
         }
-        let engine = SettleEngine(session: AXSession())
+        let engine = SettleEngine(session: ElementRegistry())
         let config = QuiescenceConfig(idleMs: 200, capMs: 1000)
         let outcome = engine.actAndSettle(pid: finder.processIdentifier, maxDepth: 1, config: config) { }
         XCTAssertLessThanOrEqual(outcome.settledAfterMs, 1000)

@@ -323,8 +323,13 @@ nonisolated enum AXValueFormatter {
             return "<\(role)>"
         }
         if typeID == CFArrayGetTypeID() {
-            let count = CFArrayGetCount(unsafeDowncast(value, to: CFArray.self))
-            return "[\(count) item\(count == 1 ? "" : "s")]"
+            let array = unsafeDowncast(value, to: CFArray.self) as NSArray
+            // String-valued arrays (e.g. AXDOMClassList) carry their meaning in the
+            // values themselves, so expand them; element arrays (AXChildren) stay summarized.
+            if let strings = array as? [String] {
+                return describeStringArray(strings)
+            }
+            return "[\(array.count) item\(array.count == 1 ? "" : "s")]"
         }
         if typeID == AXValueGetTypeID() {
             return describeAXValue(unsafeDowncast(value, to: AXValue.self))
@@ -334,6 +339,19 @@ nonisolated enum AXValueFormatter {
 
     static func describe(_ value: AXAttributeValue) -> String {
         describe(value.raw)
+    }
+
+    /// Cap on how many elements of a string-valued array we render before eliding the rest,
+    /// so a pathologically long list can't blow up the inspector row.
+    static let arrayElementLimit = 25
+
+    /// Render a string array inline (`["a", "b", "c"]`), eliding past `arrayElementLimit`.
+    private static func describeStringArray(_ items: [String]) -> String {
+        let shown = items.prefix(arrayElementLimit).map { "\"\($0)\"" }.joined(separator: ", ")
+        if items.count > arrayElementLimit {
+            return "[\(shown), … +\(items.count - arrayElementLimit) more]"
+        }
+        return "[\(shown)]"
     }
 
     private static func describeAXValue(_ axValue: AXValue) -> String {

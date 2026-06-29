@@ -52,7 +52,7 @@ final class FindPredicateTests: XCTestCase {
                    roleFilter: String? = nil, titleContains: String? = nil,
                    identifierFilter: String? = nil, valueContains: String? = nil,
                    actionable: Bool? = nil) -> Bool {
-        AXSession.elementMatches(role: role, title: title, identifier: identifier, value: value,
+        ElementRegistry.elementMatches(role: role, title: title, identifier: identifier, value: value,
                                  actions: actions, roleFilter: roleFilter, titleContains: titleContains,
                                  identifierFilter: identifierFilter, valueContains: valueContains,
                                  actionable: actionable)

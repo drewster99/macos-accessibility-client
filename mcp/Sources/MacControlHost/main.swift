@@ -17,9 +17,14 @@ import HostKit
 // .app inside the bundle. No-op once granted. (Screen Recording is prompted on first capture.)
 _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
 
+DebugLog.event("launch", "host \(DebugLog.buildIdentity()) pid=\(ProcessInfo.processInfo.processIdentifier)")
+
 final class HostDelegate: NSObject, NSXPCListenerDelegate {
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
-        // A fresh service per connection — each client gets its own MCPServer + AXSession,
+        DebugLog.event("connect", "client pid=\(newConnection.processIdentifier)")
+        newConnection.invalidationHandler = { DebugLog.event("disconnect", "client invalidated") }
+        newConnection.interruptionHandler = { DebugLog.event("disconnect", "client interrupted") }
+        // A fresh service per connection — each client gets its own MCPServer + ElementRegistry,
         // so refs are namespaced per client (the connection retains exportedObject).
         newConnection.exportedInterface = NSXPCInterface(with: MCPHostProtocol.self)
         newConnection.exportedObject = MCPHostService()

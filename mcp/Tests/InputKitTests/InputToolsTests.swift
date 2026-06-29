@@ -9,10 +9,9 @@ final class InputToolsTests: XCTestCase {
     private let granted: @Sendable () -> Bool = { true }
 
     func testNamesAndRequiredArgs() {
-        XCTAssertEqual(ClickTool().name, "click")
+        XCTAssertEqual(ClickTool().name, "click_point")
         XCTAssertEqual(ScrollTool().name, "scroll")
         XCTAssertEqual(KeyTool().name, "key")
-        XCTAssertEqual(TypeTextTool().name, "type_text")
         let clickSchema = ClickTool().descriptor["inputSchema"] as? [String: Any]
         XCTAssertEqual(clickSchema?["required"] as? [String], ["x", "y"])
     }
@@ -21,14 +20,12 @@ final class InputToolsTests: XCTestCase {
         XCTAssertTrue(ClickTool(canPostEvents: denied).call(["x": 1, "y": 2]).contains("post_event_access_denied"))
         XCTAssertTrue(ScrollTool(canPostEvents: denied).call(["dy": 10]).contains("post_event_access_denied"))
         XCTAssertTrue(KeyTool(canPostEvents: denied).call(["keys": "cmd+s"]).contains("post_event_access_denied"))
-        XCTAssertTrue(TypeTextTool(canPostEvents: denied).call(["text": "hi"]).contains("post_event_access_denied"))
     }
 
     func testMissingArgs() {
         XCTAssertTrue(ClickTool(canPostEvents: granted).call([:]).contains("missing_coordinates"))
         XCTAssertTrue(ScrollTool(canPostEvents: granted).call([:]).contains("missing_dy"))
         XCTAssertTrue(KeyTool(canPostEvents: granted).call([:]).contains("missing_keys"))
-        XCTAssertTrue(TypeTextTool(canPostEvents: granted).call([:]).contains("missing_text"))
     }
 
     /// Granted + an unparseable combo must fail at the parse step — before any post.

@@ -14,6 +14,7 @@ import SwiftUI
 
 @main
 struct MacControlApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     var body: some Scene {
         WindowGroup("MacControlMCP") {
             ContentView()
@@ -21,6 +22,44 @@ struct MacControlApp: App {
                 .padding(20)
         }
         .windowResizability(.contentSize)
+    }
+}
+
+/// Auto-registers the host LaunchAgent on launch (idempotent — keeps the registration pointed at
+/// the current bundle across updates) and boots any *stale* host so launchd relaunches the current
+/// binary on demand. With `--register-and-exit` — the relay's quiet self-bootstrap — it does this
+/// headlessly and quits before showing UI, so a cold MCP-client start needs no manual launch.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let agent = SMAppService.agent(plistName: HostLifecycle.plistName)
+        do {
+            try agent.register()
+        } catch {
+            // Unsigned/dev builds (or not in /Applications) can't register; the UI surfaces this.
+            // Nothing actionable headlessly.
+        }
+        HostLifecycle.terminateStaleHost()
+        if CommandLine.arguments.contains("--register-and-exit") {
+            NSApp.terminate(nil)
+        }
+    }
+}
+
+enum HostLifecycle {
+    static let plistName = "com.nuclearcyborg.maccontrol.host.plist"
+    static let hostBundleID = "com.nuclearcyborg.maccontrol.host"
+
+    /// Terminate any host running from a DIFFERENT bundle than this app's (a leftover from a prior
+    /// install/location) so the current binary launches on the next on-demand connection. A host
+    /// from the *current* bundle is left running — don't disrupt an in-flight session. (Same-path
+    /// in-place updates self-heal: an idle on-demand host exits and launchd starts the new binary.)
+    static func terminateStaleHost() {
+        let current = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/MacControlHost.app").standardizedFileURL
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: hostBundleID)
+        where app.bundleURL?.standardizedFileURL != current {
+            app.terminate()
+        }
     }
 }
 
@@ -61,6 +100,8 @@ final class AppModel: ObservableObject {
     func register() {
         do {
             try agent.register()
+            HostLifecycle.terminateStaleHost()
+            if agent.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
             lastMessage = runningFromApplications ? "" :
                 "Registered, but this isn't the /Applications build — registration may not stick. Use the notarized app in /Applications."
         } catch {

@@ -85,15 +85,21 @@ public enum SyntheticInput {
         }
     }
 
-    /// Arbitrary text via Unicode posting (layout-independent).
+    /// Arbitrary text via Unicode posting (layout-independent). One keyDown/keyUp pair PER
+    /// character: a single event carrying the whole string only delivers its first character in
+    /// most apps (they read one char per key event), so multi-char input silently truncates.
+    /// Iterating by Character (grapheme cluster) keeps emoji/combining marks intact; the brief
+    /// gap lets the target app's run loop consume each event before the next arrives.
     public static func typeUnicode(_ text: String) {
         let source = CGEventSource(stateID: .hidSystemState)
-        let utf16 = Array(text.utf16)
-        for keyDown in [true, false] {
-            if let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown) {
+        for character in text {
+            let utf16 = Array(String(character).utf16)
+            for keyDown in [true, false] {
+                guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown) else { continue }
                 event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
                 event.post(tap: .cghidEventTap)
             }
+            Thread.sleep(forTimeInterval: 0.005)
         }
     }
 

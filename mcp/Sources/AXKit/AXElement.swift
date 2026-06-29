@@ -64,6 +64,53 @@ public struct AXElement: @unchecked Sendable {
         return err == .success && settable.boolValue
     }
 
+    /// Whether `attribute` is writable on this element (`AXUIElementIsAttributeSettable`).
+    public func isSettable(_ attribute: String) -> Bool {
+        var settable: DarwinBoolean = false
+        return AXUIElementIsAttributeSettable(raw, attribute as CFString, &settable) == .success && settable.boolValue
+    }
+
+    /// The selected text range (a zero-length range is the insertion caret). `nil` if the element
+    /// doesn't expose a CFRange-typed `AXSelectedTextRange`.
+    public var selectedTextRange: CFRange? {
+        guard let value = copyAttribute(kAXSelectedTextRangeAttribute),
+              CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        let axValue = unsafeDowncast(value, to: AXValue.self)
+        guard AXValueGetType(axValue) == .cfRange else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(axValue, .cfRange, &range) else { return nil }
+        return range
+    }
+
+    /// Whether this app element exposes a window yet. Checks `AXChildren` (which lists windows and
+    /// populates promptly on launch) as well as `AXWindows` (which can lag empty for seconds after
+    /// an app launches) — so launch readiness isn't stalled waiting on `AXWindows`.
+    public var hasWindow: Bool {
+        if children.contains(where: { $0.role == kAXWindowRole as String }) { return true }
+        return !windows.isEmpty
+    }
+
+    /// Total character count (`AXNumberOfCharacters`), for sanity-checking a target range.
+    public var numberOfCharacters: Int? {
+        (copyAttribute(kAXNumberOfCharactersAttribute) as? NSNumber)?.intValue
+    }
+
+    /// Replace the current selection (or insert at the caret, when the selection is zero-length)
+    /// with `text` — the same effect as typing, via the settable `AXSelectedText` attribute. No
+    /// keystrokes, no clipboard, no focus needed. Caller must confirm `isSettable` first.
+    @discardableResult
+    public func setSelectedText(_ text: String) -> Bool {
+        AXUIElementSetAttributeValue(raw, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+    }
+
+    /// Move the selection/caret to `range` (`AXSelectedTextRange`).
+    @discardableResult
+    public func setSelectedRange(_ range: CFRange) -> Bool {
+        var value = range
+        guard let axValue = AXValueCreate(.cfRange, &value) else { return false }
+        return AXUIElementSetAttributeValue(raw, kAXSelectedTextRangeAttribute as CFString, axValue) == .success
+    }
+
     public var actions: [String] {
         var names: CFArray?
         guard AXUIElementCopyActionNames(raw, &names) == .success else { return [] }
@@ -120,6 +167,32 @@ public struct AXElement: @unchecked Sendable {
         guard let value = copyAttribute(kAXFocusedUIElementAttribute),
               CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return AXElement(unsafeDowncast(value, to: AXUIElement.self))
+    }
+
+    /// The element's parent in the AX tree (`kAXParentAttribute`), or `nil` at the root.
+    public var parent: AXElement? {
+        guard let value = copyAttribute(kAXParentAttribute),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return AXElement(unsafeDowncast(value, to: AXUIElement.self))
+    }
+
+    /// The window containing this element (`kAXWindowAttribute`), or `nil`. Raising this to be the
+    /// key/main window is required before synthetic keystrokes will reach the element — keys go to
+    /// the frontmost app's *key window*, so a focused element in a background window won't receive
+    /// them.
+    public var window: AXElement? {
+        guard let value = copyAttribute(kAXWindowAttribute),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return AXElement(unsafeDowncast(value, to: AXUIElement.self))
+    }
+
+    /// Whether the element currently holds keyboard focus (`kAXFocusedAttribute` is true) — the
+    /// read-back used to confirm a `setFocused()` actually took (some elements accept the set call
+    /// but never become first responder).
+    public var isFocused: Bool {
+        guard let value = copyAttribute(kAXFocusedAttribute),
+              CFGetTypeID(value) == CFBooleanGetTypeID() else { return false }
+        return CFBooleanGetValue(unsafeDowncast(value, to: CFBoolean.self))
     }
 
     /// Hit-test: the element at a screen point (AX top-left coordinates).
@@ -189,6 +262,104 @@ public struct AXElement: @unchecked Sendable {
         guard let value = copyAttribute(kAXMenuBarAttribute),
               CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return AXElement(unsafeDowncast(value, to: AXUIElement.self))
+    }
+}
+
+// MARK: - control_app enrichment (labels, values, ranges, links, generic booleans, collections)
+
+public extension AXElement {
+    /// Numeric attribute reader (NSNumber-backed AX values).
+    func numberAttribute(_ name: String) -> Double? {
+        (copyAttribute(name) as? NSNumber)?.doubleValue
+    }
+
+    /// Array-of-elements attribute reader (rows/cells/etc.).
+    func elementArrayAttribute(_ name: String) -> [AXElement]? {
+        guard let array = copyAttribute(name) as? [AXUIElement] else { return nil }
+        return array.map(AXElement.init)
+    }
+
+    /// Accessibility description / help — the 2nd and 3rd label fallbacks after AXTitle (§7).
+    var axDescription: String? { stringAttribute("AXDescription") }
+    var help: String? { stringAttribute("AXHelp") }
+
+    /// AXValue as a number when the control's value is numeric (slider/scrollbar/stepper).
+    var numericValue: Double? { (copyAttribute(kAXValueAttribute) as? NSNumber)?.doubleValue }
+    var valueIsNumeric: Bool { numericValue != nil }
+
+    var minValue: Double? { numberAttribute("AXMinValue") }
+    var maxValue: Double? { numberAttribute("AXMaxValue") }
+    var valueDescription: String? { stringAttribute("AXValueDescription") }
+    var placeholderValue: String? { stringAttribute("AXPlaceholderValue") }
+
+    /// AXURL destination as an absolute string (links, web areas, some images).
+    var url: String? { (copyAttribute("AXURL") as? NSURL)?.absoluteString }
+
+    /// Every boolean-typed attribute, name → value. The generic state source (§8); the
+    /// renderer surfaces the true ones (with AXEnabled inverted to `disabled`).
+    var booleanAttributes: [String: Bool] {
+        var result: [String: Bool] = [:]
+        for name in attributeNames {
+            guard let value = copyAttribute(name), CFGetTypeID(value) == CFBooleanGetTypeID() else { continue }
+            result[name] = CFBooleanGetValue(unsafeDowncast(value, to: CFBoolean.self))
+        }
+        return result
+    }
+
+    /// Raw (uncleaned) action names — the exact strings `AXUIElementPerformAction` needs (§9).
+    var rawActionNames: [String] {
+        var names: CFArray?
+        guard AXUIElementCopyActionNames(raw, &names) == .success else { return [] }
+        return (names as? [String]) ?? []
+    }
+
+    /// Immediate-child count — one cheap read for the `[N hidden]` marker (§5). `nil` when the
+    /// read fails (→ `[more hidden]`).
+    var childCount: Int? {
+        guard let array = copyAttribute(kAXChildrenAttribute) as? [AXUIElement] else { return nil }
+        return array.count
+    }
+
+    // Disclosure (outline rows)
+    var disclosureLevel: Int? { numberAttribute("AXDisclosureLevel").map { Int($0) } }
+    var isDisclosing: Bool? {
+        guard let value = copyAttribute("AXDisclosing"), CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+        return CFBooleanGetValue(unsafeDowncast(value, to: CFBoolean.self))
+    }
+    var isDisclosingSettable: Bool {
+        var settable: DarwinBoolean = false
+        return AXUIElementIsAttributeSettable(raw, "AXDisclosing" as CFString, &settable) == .success && settable.boolValue
+    }
+    @discardableResult
+    func setDisclosing(_ flag: Bool) -> Bool {
+        AXUIElementSetAttributeValue(raw, "AXDisclosing" as CFString, flag ? kCFBooleanTrue : kCFBooleanFalse) == .success
+    }
+
+    // Collections (table/grid/outline) — efficient subset attributes (§10)
+    var rowCount: Int? { numberAttribute("AXRowCount").map { Int($0) } }
+    var columnCount: Int? { numberAttribute("AXColumnCount").map { Int($0) } }
+    var columnTitles: [String]? { copyAttribute("AXColumnTitles") as? [String] }
+    var visibleRows: [AXElement]? { elementArrayAttribute("AXVisibleRows") }
+    var selectedRows: [AXElement]? { elementArrayAttribute("AXSelectedRows") }
+    var visibleCells: [AXElement]? { elementArrayAttribute("AXVisibleCells") }
+    var selectedCells: [AXElement]? { elementArrayAttribute("AXSelectedCells") }
+
+    /// The app element's windows in `AXWindows` order (native / best-effort z-order, §4).
+    var windows: [AXElement] { elementArrayAttribute("AXWindows") ?? [] }
+
+    /// The point AX recommends for activating this element (`AXActivationPoint`), in top-left
+    /// screen coordinates — the right place to synthesize a click for `activate`.
+    var activationPoint: CGPoint? {
+        guard let value = copyAttribute("AXActivationPoint"), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        return AXValueGetValue(unsafeDowncast(value, to: AXValue.self), .cgPoint, &point) ? point : nil
+    }
+
+    /// Numeric value setter (slider/scrollbar) — writes a `CFNumber`, guarded by settability.
+    @discardableResult
+    func setValue(number: Double) -> Bool {
+        guard isValueSettable else { return false }
+        return AXUIElementSetAttributeValue(raw, kAXValueAttribute as CFString, NSNumber(value: number)) == .success
     }
 }
 

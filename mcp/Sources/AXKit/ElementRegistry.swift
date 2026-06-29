@@ -1,5 +1,5 @@
 //
-//  AXSession.swift
+//  ElementRegistry.swift
 //  AXKit
 //
 //  The §4 handle table. Refs are assigned by ELEMENT IDENTITY (CFEqual) so the same
@@ -13,7 +13,7 @@ import CoreGraphics
 import Foundation
 import MacControlMCPCore
 
-public final class AXSession {
+public final class ElementRegistry {
     private struct Stored {
         var element: AXElement
         var locator: Locator?
@@ -24,6 +24,11 @@ public final class AXSession {
     private var storage: [String: Stored] = [:]
     private var elementToRef: [AXElement: String] = [:]
     private var lastSnapshots: [pid_t: ElementNode] = [:]
+
+    // control_app state (§ tree persistence): the last walked tree per app, and child→parent
+    // ref links that power parent-climb stale recovery and incremental expand.
+    private var controlTrees: [pid_t: ControlNode] = [:]
+    private var controlParents: [String: String] = [:]
 
     public init() {}
 
@@ -65,9 +70,11 @@ public final class AXSession {
         // while iterating it.
         for (ref, stored) in storage.filter({ !$0.value.element.isAlive }) {
             elementToRef[stored.element] = nil
+            controlParents[ref] = nil
             storage[ref] = nil
         }
         lastSnapshots = lastSnapshots.filter { kill($0.key, 0) == 0 }
+        controlTrees = controlTrees.filter { kill($0.key, 0) == 0 }
     }
 
     private func match(_ ref: String, _ element: AXElement) -> Match {
@@ -123,6 +130,77 @@ public final class AXSession {
 
     public func element(for ref: String) -> AXElement? { storage[ref]?.element }
 
+    /// Mint (or reuse) an identity-stable ref for an element — the control_app walk's entry
+    /// point into the handle table. Same element (CFEqual) always returns the same ref.
+    @discardableResult
+    public func handle(for element: AXElement, pid: pid_t?) -> String {
+        ref(for: element, pid: pid)
+    }
+
+    // MARK: - control_app tree persistence
+
+    /// Store the freshly-walked tree for a pid and merge its parent links.
+    public func storeControlTree(_ tree: ControlNode, pid: pid_t) {
+        controlTrees[pid] = tree
+        for (child, parent) in ControlTree.parentLinks(of: tree) { controlParents[child] = parent }
+    }
+
+    /// The persisted node for a ref (from its app's stored tree), if any.
+    public func controlNode(for ref: String) -> ControlNode? {
+        guard let pid = storage[ref]?.pid, let tree = controlTrees[pid] else { return nil }
+        return ControlTree.find(ref, in: tree)
+    }
+
+    /// Splice an updated subtree for `ref` back into its app's stored tree.
+    public func updateControlTree(ref: String, subtree: ControlNode) {
+        guard let pid = storage[ref]?.pid, let tree = controlTrees[pid] else { return }
+        controlTrees[pid] = ControlTree.replacingSubtree(ref, in: tree, with: subtree)
+        for (child, parent) in ControlTree.parentLinks(of: subtree) { controlParents[child] = parent }
+    }
+
+    /// Nearest live element at or above `ref`, climbing persisted parent links (§ stale
+    /// recovery). Returns the element and the ref it was found at (== `ref` when alive).
+    public func liveAncestor(of ref: String) -> (element: AXElement, ref: String)? {
+        var current: String? = ref
+        while let r = current {
+            if let element = storage[r]?.element, element.isAlive { return (element, r) }
+            current = controlParents[r]
+        }
+        return nil
+    }
+
+    /// The parent ref of `ref` in the persisted tree, if known.
+    public func parentRef(of ref: String) -> String? { controlParents[ref] }
+
+    /// Nearest window/dialog/sheet ancestor of `ref` (for a post-navigation `refresh:"window"`),
+    /// or nil if `ref` isn't under one in a stored tree.
+    public func windowAncestor(of ref: String) -> String? {
+        let windowTypes: Set<String> = ["window", "dialog", "sheet"]
+        var current: String? = ref
+        while let r = current {
+            if let node = controlNode(for: r), windowTypes.contains(node.type) { return r }
+            current = controlParents[r]
+        }
+        return nil
+    }
+
+    /// Evict trees/handles for apps that have exited — junk data once the pid is gone.
+    public func evictDeadApps() {
+        let deadPids = Set(controlTrees.keys.filter { kill($0, 0) != 0 })
+        guard !deadPids.isEmpty else { return }
+        for pid in deadPids {
+            controlTrees[pid] = nil
+            lastSnapshots[pid] = nil
+        }
+        // Iterate a SNAPSHOT (filter makes a new dictionary) so we never mutate `storage` while
+        // iterating it (same hazard guarded against in pruneDeadHandlesIfLarge).
+        for (ref, stored) in storage.filter({ deadPids.contains($0.value.pid ?? -1) }) {
+            elementToRef[stored.element] = nil
+            controlParents[ref] = nil
+            storage[ref] = nil
+        }
+    }
+
     /// Resolve a ref to a live element, re-resolving via its locator if the element died.
     public func resolve(_ ref: String) -> RefResolution {
         guard let stored = storage[ref] else { return .unknown }
@@ -141,7 +219,10 @@ public final class AXSession {
         case .resolved(let tempRef):
             guard let element = fresh[tempRef] else { return .stale }
             // Re-bind the ORIGINAL ref to the live element so future calls hit the cache,
-            // instead of allocating a fresh ref and re-resolving (slow) on every call.
+            // instead of allocating a fresh ref and re-resolving (slow) on every call. Drop the
+            // dead element's identity-map entry first, or it leaks (it's no longer in storage,
+            // so neither prune sweep can ever reach it).
+            elementToRef[stored.element] = nil
             storage[ref] = Stored(element: element, locator: locator, pid: pid)
             elementToRef[element] = ref
             return .resolved(element)
@@ -161,7 +242,7 @@ public final class AXSession {
         var results: [Match] = []
 
         func matches(_ element: AXElement) -> Bool {
-            AXSession.elementMatches(
+            ElementRegistry.elementMatches(
                 role: element.role, title: element.title, identifier: element.identifier,
                 value: element.value, actions: element.actions,
                 roleFilter: role, titleContains: titleContains, identifierFilter: identifier,

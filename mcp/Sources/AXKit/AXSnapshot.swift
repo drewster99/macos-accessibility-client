@@ -24,7 +24,7 @@ public final class RefAllocator {
 
 public enum AXSnapshot {
     /// Walk a subtree into an ElementNode tree. `refFor` assigns a ref to each element —
-    /// callers pass an identity-stable provider (AXSession) so the same element keeps its
+    /// callers pass an identity-stable provider (ElementRegistry) so the same element keeps its
     /// ref across snapshots, which is what makes the diff meaningful.
     public static func build(
         _ root: AXElement,
@@ -59,6 +59,25 @@ public enum AXSnapshot {
         var hasher = Hasher()
         func visit(_ element: AXElement, depth: Int) {
             hasher.combine(element.role ?? "")
+            let children = element.children
+            hasher.combine(children.count)
+            if depth < maxDepth {
+                for child in children { visit(child, depth: depth + 1) }
+            }
+        }
+        visit(root, depth: 0)
+        return hasher.finalize()
+    }
+
+    /// Like `structuralSignature` but also folds in each element's value, so it detects value-only
+    /// changes (typing, a field update) that don't alter structure. Used to spot the *first* effect
+    /// of an action quickly; quiescence still keys off the structure-only signature so a constantly
+    /// changing value (clock/progress) can't prevent settling.
+    public static func changeSignature(of root: AXElement, maxDepth: Int) -> Int {
+        var hasher = Hasher()
+        func visit(_ element: AXElement, depth: Int) {
+            hasher.combine(element.role ?? "")
+            hasher.combine(element.value ?? "")
             let children = element.children
             hasher.combine(children.count)
             if depth < maxDepth {

@@ -5,7 +5,7 @@ import ApplicationServices
 
 final class WaitForToolTests: XCTestCase {
     func testDescriptorAndGating() {
-        let session = AXSession()
+        let session = ElementRegistry()
         let tool = WaitForTool(session: session)
         XCTAssertEqual(tool.name, "wait_for")
         let schema = tool.descriptor["inputSchema"] as? [String: Any]
@@ -14,7 +14,7 @@ final class WaitForToolTests: XCTestCase {
     }
 
     func testMissingArgsAndUnknownMode() {
-        let session = AXSession()
+        let session = ElementRegistry()
         let trusted: @Sendable () -> Bool = { true }
         XCTAssertTrue(WaitForTool(session: session, isTrusted: trusted).call(["pid": 1]).contains("missing_pid_or_mode"))
         XCTAssertTrue(WaitForTool(session: session, isTrusted: trusted).call(["pid": 1, "mode": "bogus"]).contains("unknown_mode"))
@@ -31,7 +31,7 @@ final class WaitForToolTests: XCTestCase {
     /// Live, read-only: a stable app goes idle quickly.
     func testLiveIdleSatisfiedQuickly() throws {
         let pid = try finderPID()
-        let outcome = WaitEngine(session: AXSession()).wait(pid: pid, condition: .idle(idleMs: 300), timeoutMs: 3000)
+        let outcome = WaitEngine(session: ElementRegistry()).wait(pid: pid, condition: .idle(idleMs: 300), timeoutMs: 3000)
         XCTAssertTrue(outcome.satisfied)
         XCTAssertLessThan(outcome.waitedMs, 3000)
     }
@@ -39,7 +39,7 @@ final class WaitForToolTests: XCTestCase {
     /// Live, read-only: Finder has a window, so appears(AXWindow) is satisfied immediately.
     func testLiveAppearsWindowSatisfied() throws {
         let pid = try finderPID()
-        let outcome = WaitEngine(session: AXSession()).wait(pid: pid, condition: .appears(role: "AXWindow", titleContains: nil), timeoutMs: 3000)
+        let outcome = WaitEngine(session: ElementRegistry()).wait(pid: pid, condition: .appears(role: "AXWindow", titleContains: nil), timeoutMs: 3000)
         XCTAssertTrue(outcome.satisfied)
         XCTAssertNotNil(outcome.matchRef)
     }
@@ -47,7 +47,7 @@ final class WaitForToolTests: XCTestCase {
     /// Live, read-only: a nonsense title never appears → times out, returns not-satisfied.
     func testLiveAppearsTimesOutForNonexistent() throws {
         let pid = try finderPID()
-        let outcome = WaitEngine(session: AXSession()).wait(pid: pid, condition: .appears(role: nil, titleContains: "zzz-nonexistent-zzz"), timeoutMs: 500)
+        let outcome = WaitEngine(session: ElementRegistry()).wait(pid: pid, condition: .appears(role: nil, titleContains: "zzz-nonexistent-zzz"), timeoutMs: 500)
         XCTAssertFalse(outcome.satisfied)
     }
 }
