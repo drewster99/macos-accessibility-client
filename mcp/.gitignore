@@ -1,8 +1,0 @@
-.build/
-
-# Build / packaging artifacts
-dist/
-
-# XcodeGen output (project.yml is the source of truth — run `xcodegen generate`)
-Generated/
-*.xcodeproj/
