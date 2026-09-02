@@ -14,7 +14,7 @@ specific blocker rather than skipping it.
    Screen-Recording relaunch behavior characterized; relay reconnect across host re-exec works.
    If any spike disproves the design, fix the design before building on it.
 2. **Everything builds.** Zero errors **and** zero warnings, in Debug and Release, built
-   **via xcode-mcp-server** (never `xcodebuild` / `swift build`).
+   **via drews-xcode-mcp** (never `xcodebuild` / `swift build`).
 3. **Every tool works.** Each tool in §8 is implemented and exercised end-to-end through a
    real MCP client → relay → host, with a passing assertion — including the generic AX verbs,
    CGEvent input, clipboard, OCR, screenshots (Mac + simulator), and the `simctl` suite.

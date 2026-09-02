@@ -24,7 +24,7 @@ capture screenshots of the screen, a window, an app, an element, or a simulator.
   the app need not be visible or open.
 
 ### Non-goals (v1)
-- Building/running Xcode projects — that's `xcode-mcp-server`'s job; this server
+- Building/running Xcode projects — that's `drews-xcode-mcp`'s job; this server
   complements it.
 - True multi-touch gestures (pinch/rotate) — a single synthetic pointer can't do
   them reliably.
@@ -410,14 +410,14 @@ visualization — but correctness never depends on it.
 In-process via `SCScreenshotManager.captureImage` — **no subprocess, no temp file**,
 **downscale at capture time** (`SCStreamConfiguration.width/height`) to protect the
 token budget, and **exclude our own overlay/cursor** via content-filter exclusion. This
-strictly beats the `screencapture`/`swift`-interpreter shell-outs `xcode-mcp-server`
+strictly beats the `screencapture`/`swift`-interpreter shell-outs `drews-xcode-mcp`
 uses on the Mac side; for the simulator we converge on `simctl`.
 
 `SCScreenshotManager.captureImage` is macOS 14+ (our floor is 15, so always available).
 `SCContentFilter` app/window capture is **display-scoped**: an app whose windows span
 two displays needs one capture per display, then compose or return multiple images.
 
-**Return modes:** default a **file path** (token-cheap, like `xcode-mcp-server`,
+**Return modes:** default a **file path** (token-cheap, like `drews-xcode-mcp`,
 written to a pruned per-user cache dir); **inline base64** on request (we can downscale
 in-memory first); optional `highlight: ref` draws a box around an element's frame.
 

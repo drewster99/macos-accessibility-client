@@ -1,6 +1,6 @@
 #!/bin/bash
 # P0a spike builder. THROWAWAY — compiled with swiftc on purpose (it is not the product;
-# the product builds via xcode-mcp-server). Assembles a signed control app whose bundled
+# the product builds via drews-xcode-mcp). Assembles a signed control app whose bundled
 # LaunchAgent vends the host's Mach service on demand, plus a good relay and an ad-hoc
 # "evil" relay to prove XPC admission rejects non-team callers.
 set -euo pipefail

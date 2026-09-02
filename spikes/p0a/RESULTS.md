@@ -2,7 +2,7 @@
 
 Validates the load-bearing TCC/XPC assumptions in `docs/MCP_DESIGN.md` §2 before the
 real build. Throwaway harness (built with `swiftc` via `build.sh`; the product builds via
-xcode-mcp-server).
+drews-xcode-mcp).
 
 ## ✅ Validated autonomously (no TCC grant needed)
 
